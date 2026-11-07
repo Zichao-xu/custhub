@@ -5,7 +5,7 @@
 set -euo pipefail
 REF=${1:?缺版本}; TOKEN=${2:?缺入池令牌}
 REPO='Zichao-xu/custhub'
-SUMS='6b855e288406bda265be1c30ededa85fcf5e7aeef91d2f4bffc531dc7327e9c9  install.sh
+SUMS='0d5ce0ef0fa9f760b0a369b4feaa063c0efdd909935ae2210161a296bb641888  install.sh
 3178d36171a0f941d4be722c26df487af616b59629bf8c56344efff7429ad8b7  custhub
 ae708e6c87b0f24215451c2968db4370fb4976182e4364ff3f4224d48d55509e  httpd.py
 59d4d77213c89b91750898b37968e81be6094dfc694c080bf02802e3bc732a47  pool.py

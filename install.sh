@@ -225,7 +225,8 @@ EOF
 [ -f "/etc/wireguard/$IF.conf" ] || { printf '[Interface]\nAddress = %s.1/24\nListenPort = %s\nPrivateKey = %s\n' "$NET" "$WG_PORT" "$(cat "$S/server.key")" >"/etc/wireguard/$IF.conf"; chmod 600 "/etc/wireguard/$IF.conf"; }
 systemctl daemon-reload
 systemctl enable -q custhub-fw "wg-quick@$IF" custhub-http custhub-pool.timer
-systemctl restart custhub-fw
+# 防火墙: 在跑就直接重载规则; 不能 restart —— wg-quick 对它是 Requires, restart 会连带重启隧道, 所有客户掉线
+if systemctl is-active -q custhub-fw; then nft -f "$S/fw.nft" && "$L/fw-passthru.sh"; else systemctl start custhub-fw; fi
 # 隧道接口在跑就不重启(重启会让所有客户断开到下次重新握手), 配置由下面的 custhub sync 热更新
 systemctl is-active -q "wg-quick@$IF" || systemctl start "wg-quick@$IF"
 systemctl restart custhub-http
