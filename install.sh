@@ -57,7 +57,7 @@ wg pubkey <"$S/server.key" >"$S/server.pub"
 pyp(){ runuser -u "$UW" -- env POOL_DIR="$P" python3 -I "$L/pool.py" "$@"; }
 
 # ---- 设置: 首次安装时定下, 之后以已存的为准(改网段/端口会让已接入客户失效) ----
-NET= HOST= NAME= WG_PORT=${WG_PORT:-} HTTP_PORT=${HTTP_PORT:-}
+NET= HOST= NAME= VERSION= REPO= WG_PORT=${WG_PORT:-} HTTP_PORT=${HTTP_PORT:-}
 [ -f "$S/settings" ] && . "$S/settings"
 probe=
 if [ -n "$SEEDS" ] && { [ -z "$NET" ] || [ -z "$HOST" ]; }; then
@@ -85,7 +85,9 @@ print(next("10.89.%d"%k for k in range(256) if "10.89.%d"%k not in used))' "$pro
 fi
 [ -n "$NAME" ] || NAME=${HUB_NAME:-$(hostname -s | tr -cd 'A-Za-z0-9-' | cut -c1-24)}; NAME=${NAME:-hub}
 WG_PORT=${WG_PORT:-51820}; HTTP_PORT=${HTTP_PORT:-8443}
-printf 'NET=%s\nWG_PORT=%s\nHTTP_PORT=%s\nHOST=%s\nNAME=%s\n' "$NET" "$WG_PORT" "$HTTP_PORT" "$HOST" "$NAME" >"$S/settings"
+# 版本/仓库: 由 bootstrap 传入, 供 Mac 远程升级时判断是否升好、从哪拉
+VERSION=${CUSTHUB_REF:-$VERSION}; REPO=${CUSTHUB_REPO:-$REPO}
+printf 'NET=%s\nWG_PORT=%s\nHTTP_PORT=%s\nHOST=%s\nNAME=%s\nVERSION=%s\nREPO=%s\n' "$NET" "$WG_PORT" "$HTTP_PORT" "$HOST" "$NAME" "$VERSION" "$REPO" >"$S/settings"
 if ! systemctl is-active -q "wg-quick@$IF" 2>/dev/null && ss -lnuH "sport = :$WG_PORT" | grep -q .; then say "警告: UDP $WG_PORT 已被别的程序占用"; fi
 if ! systemctl is-active -q custhub-http 2>/dev/null && ss -lntH "sport = :$HTTP_PORT" | grep -q .; then say "警告: TCP $HTTP_PORT 已被别的程序占用"; fi
 

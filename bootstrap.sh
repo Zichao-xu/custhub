@@ -5,8 +5,8 @@
 set -euo pipefail
 REF=${1:?缺版本}; TOKEN=${2:?缺入池令牌}
 REPO='Zichao-xu/custhub'
-SUMS='be246e17cc2fcb5f5c91cbe0288c919bdeedd6dc3093271bc2928e26902ca20a  install.sh
-bb602f5a910bb419c3bf5174a7d4c4cb461836d1cc3b3931f0958291b9e99f0c  custhub
+SUMS='bc04f1f47fe56c24cd966a2f374e85715ec4fd599c462e87d1108ee792737257  install.sh
+ca431a4d865640e83734cd22686361847677f3f1ed445092450b3e4c34e71b1c  custhub
 ae708e6c87b0f24215451c2968db4370fb4976182e4364ff3f4224d48d55509e  httpd.py
 a3387de80ef7a96466fe997fcb748ffce2fe75c5b7074de030858636fe49a50b  pool.py
 e2d52360b39abe35965d8062e6b8ce2b353068a27910e72246b7ec8b663a979c  uninstall.sh'
@@ -32,4 +32,4 @@ while read -r sum f; do
   [ -n "$ok" ] || { echo "下载 $f 失败: GitHub 和镜像都不通或内容不符" >&2; exit 1; }
 done <<<"$SUMS"
 echo "[custhub] 代码已下载并校验 (版本 ${REF:0:7})"
-bash "$d/install.sh" "$TOKEN"
+CUSTHUB_REF="$REF" CUSTHUB_REPO="$REPO" bash "$d/install.sh" "$TOKEN"

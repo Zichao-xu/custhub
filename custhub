@@ -1,6 +1,8 @@
 #!/bin/bash
 # custhub — 中枢上的唯一管理入口(root 跑)。Mac 经 ssh 受限账号调用, 参数全部按白名单校验。
-#   info                      输出 name/host/net/wg_port/http_port/srvpub/ssh_port/sshkey
+#   info                      输出 name/host/net/wg_port/http_port/srvpub/ssh_port/sshkey/version
+#   upgrade REF SHA           按指定版本(git commit + bootstrap.sh 的 sha256)从 GitHub/镜像拉代码后台重装, 效果同在服务器上粘一键命令
+#   self-uninstall yes        后台卸载本机中枢(通知池子下线后清干净)
 #   pool                      中枢池名单 TSV: name host wg_port http_port srvpub net joined seen left
 #   reserve                   预留一个客户号(最小空位), 输出号
 #   open N PUB                给客户号 N 开通公钥
@@ -61,7 +63,8 @@ cmd=${1:-}; shift || true
 case $cmd in
   info)
     printf 'name=%s\nhost=%s\nnet=%s\nwg_port=%s\nhttp_port=%s\nsrvpub=%s\nssh_port=%s\nsshkey=%s\n' "${NAME:-}" "${HOST:-}" "$NET" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" \
-      "$(sshd -T 2>/dev/null | awk '$1=="port" && !p{print $2; p=1}' || true)" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" ;;
+      "$(sshd -T 2>/dev/null | awk '$1=="port" && !p{print $2; p=1}' || true)" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
+    printf 'version=%s\n' "${VERSION:-}" ;;
   pool)
     POOL_DIR=/var/lib/custhub-pool python3 -I /usr/local/lib/custhub/pool.py list ;;
   reserve)
@@ -133,5 +136,30 @@ case $cmd in
     for pid in $(ss -Hltnp "sport = :$p" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
       [ "$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')" = "$TU" ] && kill "$pid" 2>/dev/null && echo "kicked $pid"
     done; true ;;
+  upgrade)
+    [[ ${1:-} =~ ^[0-9a-f]{40}$ ]] && [[ ${2:-} =~ ^[0-9a-f]{64}$ ]] || die "bad version"
+    [ -n "${REPO:-}" ] || die "本机没记仓库(老版本装的), 请在服务器上粘一次一键命令"
+    # 入池令牌用本机已有的: 池密钥 + 管理公钥 + 池里其他中枢当种子
+    k=$(cat /var/lib/custhub-pool/pool.key)
+    a=$(sed -n 's/^.*command="[^"]*" //p' "/home/custhub/.ssh/authorized_keys" | head -1 | cut -d' ' -f1,2)
+    seeds=$(POOL_DIR=/var/lib/custhub-pool python3 -I /usr/local/lib/custhub/pool.py list | awk -F'\t' -v me="${HOST:-}" '$9=="0" && $2!=me {printf "%s:%s ", $2, $4}')
+    tok=$(python3 -Ic 'import sys,json,base64;k,a,*s=sys.argv[1:];print("CH1:"+base64.b64encode(json.dumps({"k":k,"a":a,"s":s},separators=(",",":")).encode()).decode())' "$k" "$a" $seeds)
+    cat >"$S/upgrade.sh" <<EOF
+#!/bin/bash
+f=\$(mktemp)
+for u in 'https://api.github.com/repos/$REPO/contents/bootstrap.sh?ref=$1' 'https://raw.githubusercontent.com/$REPO/$1/bootstrap.sh' 'https://cdn.jsdelivr.net/gh/$REPO@$1/bootstrap.sh' 'https://ghfast.top/https://raw.githubusercontent.com/$REPO/$1/bootstrap.sh'; do
+  curl -fsSL -m20 -H 'Accept: application/vnd.github.raw' -o \$f "\$u" && echo "$2  \$f" | sha256sum -c --status && { bash \$f $1 '$tok'; exit \$?; }
+done
+echo "下载 bootstrap 失败"; exit 1
+EOF
+    chmod 700 "$S/upgrade.sh"
+    # 脱离当前 ssh 会话跑(重装会重启服务)
+    setsid nohup bash "$S/upgrade.sh" >"$S/upgrade.log" 2>&1 </dev/null &
+    echo started ;;
+  self-uninstall)
+    [ "${1:-}" = yes ] || die "need: self-uninstall yes"
+    # 脱离当前 ssh 会话跑: 卸载会结束 custhub 账号的所有进程(包括这条会话)
+    setsid nohup bash -c 'sleep 2; /usr/local/lib/custhub/uninstall.sh -y' >/var/log/custhub-uninstall.log 2>&1 </dev/null &
+    echo started ;;
   *) die "unknown command" ;;
 esac
