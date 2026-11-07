@@ -1,0 +1,99 @@
+#!/bin/bash
+# custhub — 中枢上的唯一管理入口(root 跑)。Mac 经 ssh 受限账号调用, 参数全部按白名单校验。
+#   info                      输出 name/host/net/wg_port/http_port/srvpub
+#   pool                      中枢池名单 TSV: name host wg_port http_port srvpub net joined seen left
+#   reserve                   预留一个客户号(最小空位), 输出号
+#   open N PUB                给客户号 N 开通公钥
+#   name N B64                记客户名(base64, 免引号/中文问题)
+#   drop N                    收回客户号
+#   sync                      按 peers/ 重新生成并应用 wg 配置
+#   list                      N  公钥  名字(b64)  最近握手
+#   job-put TOKEN             stdin = tar(TOKEN.ps1 TOKEN.m.ps1 TOKEN.sh), 放到下发目录
+#   job-rm TOKEN              删下发脚本和回报
+#   report TOKEN FROM         回报日志第 FROM 行起
+#   done TOKEN | fail TOKEN   完成回报 / 失败日志尾
+#   pkg-sums                  已有安装包的 sha256  相对路径
+#   pkg-put                   stdin = tar, 解到安装包目录
+set -euo pipefail
+umask 022
+S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; IF=cust0
+. "$S/settings"   # NET WG_PORT HTTP_PORT HOST NAME
+
+die(){ echo "ERR $*" >&2; exit 1; }
+num(){ [[ $1 =~ ^[0-9]{1,3}$ ]] && [ "$1" -ge 2 ] && [ "$1" -le 254 ] || die "bad number"; }
+tok(){ [[ $1 =~ ^[0-9a-f]{16,64}$ ]] || die "bad token"; }
+pub(){ [[ $1 =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "bad key"; }
+lock(){ exec 9>"$S/lock"; flock -w 20 9; }
+
+# peers/N: pub=  name=(b64)  — 由它生成 wg 配置, 中枢重启不丢
+apply(){
+  {
+    printf '[Interface]\nAddress = %s.1/24\nListenPort = %s\nPrivateKey = %s\n' "$NET" "$WG_PORT" "$(cat "$S/server.key")"
+    for f in "$S"/peers/*; do
+      [ -f "$f" ] || continue
+      p=$(sed -n 's/^pub=//p' "$f"); [ -n "$p" ] || continue
+      printf '\n[Peer]\nPublicKey = %s\nAllowedIPs = %s.%s/32\n' "$p" "$NET" "${f##*/}"
+    done
+  } >"/etc/wireguard/$IF.conf.new"
+  chmod 600 "/etc/wireguard/$IF.conf.new"; mv "/etc/wireguard/$IF.conf.new" "/etc/wireguard/$IF.conf"
+  wg syncconf "$IF" <(wg-quick strip "$IF")
+}
+
+cmd=${1:-}; shift || true
+case $cmd in
+  info)
+    printf 'name=%s\nhost=%s\nnet=%s\nwg_port=%s\nhttp_port=%s\nsrvpub=%s\n' "${NAME:-}" "${HOST:-}" "$NET" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" ;;
+  pool)
+    POOL_DIR=/var/lib/custhub-pool python3 -I /usr/local/lib/custhub/pool.py list ;;
+  reserve)
+    lock
+    n=2; while [ -e "$S/peers/$n" ]; do n=$((n+1)); done
+    [ "$n" -le 254 ] || die "full"
+    printf 'pub=\nname=%s\nat=%s\n' "$(printf '待接入' | base64 -w0)" "$(date +%s)" >"$S/peers/$n"
+    echo "$n" ;;
+  open)
+    num "$1"; pub "$2"; lock
+    [ -f "$S/peers/$1" ] || die "not reserved"
+    sed -i "s|^pub=.*|pub=$2|" "$S/peers/$1"; apply ;;
+  name)
+    num "$1"; [[ $2 =~ ^[A-Za-z0-9+/=]{1,400}$ ]] || die "bad name"; lock
+    [ -f "$S/peers/$1" ] && sed -i "s|^name=.*|name=$2|" "$S/peers/$1" ;;
+  drop)
+    num "$1"; lock
+    rm -f "$S/peers/$1"; apply ;;
+  sync)
+    lock; apply ;;
+  list)
+    hs=$(wg show "$IF" latest-handshakes 2>/dev/null || true)
+    for f in "$S"/peers/*; do
+      [ -f "$f" ] || continue
+      p=$(sed -n 's/^pub=//p' "$f")
+      h=$(awk -v k="$p" 'k!="" && $1==k{print $2}' <<<"$hs")
+      printf '%s\t%s\t%s\t%s\t%s\n' "${f##*/}" "${p:--}" "$(sed -n 's/^name=//p' "$f")" "${h:-0}" "$(sed -n 's/^at=//p' "$f")"
+    done ;;
+  job-put)
+    tok "$1"; t=$(mktemp -d)
+    tar -x -C "$t" -f - --no-same-owner
+    for f in "$1.ps1" "$1.m.ps1" "$1.sh"; do [ -f "$t/$f" ] || die "missing $f"; install -m644 "$t/$f" "$W/j/$f"; done
+    rm -rf "$t" ;;
+  job-rm)
+    tok "$1"; rm -f "$W/j/$1".ps1 "$W/j/$1".m.ps1 "$W/j/$1".sh "$R/$1".* ;;
+  report)
+    tok "$1"; [[ $2 =~ ^[0-9]+$ ]] || die "bad offset"
+    tail -n +"$2" "$R/$1.log" 2>/dev/null || true ;;
+  done|fail)
+    tok "$1"; cat "$R/$1.$cmd" 2>/dev/null || true ;;
+  pkg-sums)
+    cd "$W/pkg" && find . -type f ! -name '.*' -print0 | xargs -0r sha256sum | sed 's| \./| |' ;;
+  pkg-put)
+    t=$(mktemp -d "$W/pkg/.in.XXXX")
+    tar -x -C "$t" -f - --no-same-owner --no-overwrite-dir
+    # 只认普通文件, 拒绝绝对路径/.. (tar 默认已去掉开头的 /)
+    if find "$t" ! -type f ! -type d | grep -q .; then rm -rf "$t"; die "only regular files"; fi
+    (cd "$t" && find . -type f -print0) | while IFS= read -r -d '' f; do
+      case $f in *..*) continue ;; esac
+      mkdir -p "$W/pkg/$(dirname "$f")"; mv -f "$t/$f" "$W/pkg/$f"; chmod 644 "$W/pkg/$f"
+    done
+    rm -rf "$t"; find "$W/pkg" -type d -exec chmod 755 {} + ;;
+  *) die "unknown command" ;;
+esac
