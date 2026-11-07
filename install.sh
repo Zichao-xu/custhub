@@ -13,7 +13,7 @@ set -euo pipefail
 SRC=$(cd "$(dirname "$0")" && pwd)
 TOKEN=${1:?缺入池令牌(在 Mac 上跑 hub/join-cmd.sh 生成整条命令)}
 S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; P=/var/lib/custhub-pool
-L=/usr/local/lib/custhub; IF=cust0; U=custhub; UW=custhub-www
+L=/usr/local/lib/custhub; IF=cust0; U=custhub; UW=custhub-www; UT=custtun
 say(){ echo "[custhub] $*"; }
 
 # ---- 解令牌 ----
@@ -39,6 +39,9 @@ modprobe wireguard 2>/dev/null || true
 # ---- 账号 ----
 id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/home/$U" --shell /bin/sh "$U"
 id "$UW" >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin "$UW"
+# 客户机挂反向隧道用; shell 必须是 /bin/sh(授权里的强制命令要靠它执行), 但授权行禁了终端, 登不进来
+id "$UT" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/home/$UT" --shell /bin/sh "$UT"
+install -d -m700 -o "$UT" -g "$UT" "/home/$UT/.ssh"
 
 # ---- 程序 ----
 install -d -m755 "$L"
@@ -87,10 +90,12 @@ if ! systemctl is-active -q "wg-quick@$IF" 2>/dev/null && ss -lnuH "sport = :$WG
 if ! systemctl is-active -q custhub-http 2>/dev/null && ss -lntH "sport = :$HTTP_PORT" | grep -q .; then say "警告: TCP $HTTP_PORT 已被别的程序占用"; fi
 
 # 本机在池里的记录(字段变了才 ver+1, 免得别人收到无意义的更新)
-python3 -I - "$P/self.json" "$NAME" "$HOST" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" "$NET" <<'PY'
+SSH_PORT=$(sshd -T 2>/dev/null | awk '$1=="port" && !p{print $2; p=1}' || true); SSH_PORT=${SSH_PORT:-22}
+[ -f /etc/ssh/ssh_host_ed25519_key.pub ] || ssh-keygen -q -A
+python3 -I - "$P/self.json" "$NAME" "$HOST" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" "$NET" "$SSH_PORT" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" <<'PY'
 import sys,json,time
-p,name,host,wg,http,pub,net=sys.argv[1:]
-new={"name":name,"host":host,"wg_port":int(wg),"http_port":int(http),"srvpub":pub,"net":net,"left":0}
+p,name,host,wg,http,pub,net,sshp,sshkey=sys.argv[1:]
+new={"name":name,"host":host,"wg_port":int(wg),"http_port":int(http),"srvpub":pub,"net":net,"ssh_port":int(sshp),"sshkey":sshkey,"left":0}
 try: old=json.load(open(p))
 except Exception: old={}
 same=all(old.get(k)==v for k,v in new.items())
@@ -108,7 +113,7 @@ set -f   # 不做通配符展开
 exec sudo -n /usr/local/sbin/custhub $SSH_ORIGINAL_COMMAND
 EOF
 chmod 755 /usr/local/sbin/custhub-ssh
-echo "$U ALL=(root) NOPASSWD: /usr/local/sbin/custhub" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub kick *\n' "$U" "$UT" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
 install -d -m700 -o "$U" -g "$U" "/home/$U/.ssh"
 echo "restrict,port-forwarding,command=\"/usr/local/sbin/custhub-ssh\" $ADMIN_KEY" >"/home/$U/.ssh/authorized_keys"
 chown "$U:$U" "/home/$U/.ssh/authorized_keys"; chmod 600 "/home/$U/.ssh/authorized_keys"
@@ -137,6 +142,8 @@ table inet custhub {
         meta skuid "$U" ct state established,related accept
         meta skuid "$U" oifname "$IF" ip daddr $NET.0/24 accept
         meta skuid "$U" reject
+        meta skuid "$UT" ct state established,related accept
+        meta skuid "$UT" reject
     }
 }
 EOF
@@ -231,7 +238,8 @@ if systemctl is-active -q custhub-fw; then nft -f "$S/fw.nft" && "$L/fw-passthru
 systemctl is-active -q "wg-quick@$IF" || systemctl start "wg-quick@$IF"
 systemctl restart custhub-http
 systemctl restart custhub-pool.timer
-custhub sync   # 按 peers/ 重新生成 wg 配置(重装/升级后客户照常在)
+custhub sync       # 按 peers/ 重新生成 wg 配置(重装/升级后客户照常在)
+custhub tun-sync   # 按 tun/ 重写反向隧道授权
 sleep 1
 systemctl is-active -q custhub-http "wg-quick@$IF" custhub-fw || { say "服务没起来:"; systemctl --no-pager status custhub-http "wg-quick@$IF" custhub-fw | tail -30; exit 1; }
 

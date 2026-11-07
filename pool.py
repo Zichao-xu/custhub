@@ -7,7 +7,7 @@
 #   pool.py probe SEED...      向种子取名单(不登记自己), 输出 JSON {pool, you}
 #   pool.py announce [SEED...] 把自己报给种子和名单上所有成员, 合并它们的名单
 #   pool.py leave              墓碑自己并通知所有成员
-#   pool.py list               本机名单 TSV: name host wg_port http_port srvpub net joined seen left
+#   pool.py list               本机名单 TSV: name host wg_port http_port srvpub net joined seen left ssh_port sshkey
 import hashlib, hmac, json, os, sys, time, fcntl, urllib.request
 
 P = os.environ.get("POOL_DIR", "/var/lib/custhub-pool")
@@ -58,6 +58,11 @@ def clean(m):
             r[k] = int(r[k])
         assert isinstance(r["srvpub"], str) and len(r["srvpub"]) == 44
         assert isinstance(r["net"], str) and r["net"].count(".") == 2
+        # 反向隧道用(旧版中枢没有这两项)
+        r["ssh_port"] = int(m.get("ssh_port") or 22)
+        k = m.get("sshkey") or ""
+        assert k == "" or (isinstance(k, str) and k.startswith("ssh-ed25519 ") and len(k) < 120 and all(c.isalnum() or c in " +/=-" for c in k))
+        r["sshkey"] = k
         return r
     except Exception:
         return None
@@ -179,7 +184,7 @@ def main(argv):
         return 0
     if cmd == "list":
         for m in sorted(_load().values(), key=lambda m: (m.get("joined", 0), m["host"])):
-            print("\t".join(str(m.get(k, "")) for k in ("name", "host", "wg_port", "http_port", "srvpub", "net", "joined", "seen", "left")))
+            print("\t".join(str(m.get(k, "")) for k in ("name", "host", "wg_port", "http_port", "srvpub", "net", "joined", "seen", "left", "ssh_port", "sshkey")))
         return 0
     print(__doc__ or "usage: probe|announce|leave|list", file=sys.stderr)
     return 2

@@ -1,6 +1,6 @@
 #!/bin/bash
 # custhub — 中枢上的唯一管理入口(root 跑)。Mac 经 ssh 受限账号调用, 参数全部按白名单校验。
-#   info                      输出 name/host/net/wg_port/http_port/srvpub
+#   info                      输出 name/host/net/wg_port/http_port/srvpub/ssh_port/sshkey
 #   pool                      中枢池名单 TSV: name host wg_port http_port srvpub net joined seen left
 #   reserve                   预留一个客户号(最小空位), 输出号
 #   open N PUB                给客户号 N 开通公钥
@@ -14,6 +14,12 @@
 #   done TOKEN | fail TOKEN   完成回报 / 失败日志尾
 #   pkg-sums                  已有安装包的 sha256  相对路径
 #   pkg-put                   stdin = tar, 解到安装包目录
+# 反向隧道(客户机用 custtun 账号 ssh -R 挂回拨口 127.0.0.1:22000+N, N = Mac 上的全局别名号 c-N):
+#   tun-set N KEYB64          登记/更新客户 N 的 ssh 公钥(base64 的 "ssh-ed25519 AAAA...")
+#   tun-del N                 撤销客户 N
+#   tun-list                  N  回拨口  是否在线(1/0)
+#   tun-sync                  按 tun/ 重写 custtun 的 authorized_keys
+#   kick N                    踢掉占着客户 N 回拨口的旧连接(客户机断线重连前自己调; 只踢 custtun 的进程)
 set -euo pipefail
 umask 022
 S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; IF=cust0
@@ -24,6 +30,18 @@ num(){ [[ $1 =~ ^[0-9]{1,3}$ ]] && [ "$1" -ge 2 ] && [ "$1" -le 254 ] || die "ba
 tok(){ [[ $1 =~ ^[0-9a-f]{16,64}$ ]] || die "bad token"; }
 pub(){ [[ $1 =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "bad key"; }
 lock(){ exec 9>"$S/lock"; flock -w 20 9; }
+tn(){ [[ $1 =~ ^[0-9]{1,3}$ ]] && [ "$1" -ge 2 ] && [ "$1" -le 999 ] || die "bad client number"; }
+TUN_BASE=22000; TU=custtun
+tun_sync(){
+  local f n k tmp
+  mkdir -p "$S/tun"; tmp=$(mktemp)
+  for f in "$S"/tun/*; do
+    [ -f "$f" ] || continue; n=${f##*/}; k=$(cat "$f")
+    # 只许挂自己的回拨口; 唯一能跑的命令是踢自己的旧连接; 不能开终端, 出站被 nft 封死
+    printf 'restrict,port-forwarding,permitlisten="127.0.0.1:%s",command="sudo -n /usr/local/sbin/custhub kick %s" %s c-%s\n' "$((TUN_BASE+n))" "$n" "$k" "$n" >>"$tmp"
+  done
+  install -m600 -o "$TU" -g "$TU" "$tmp" "/home/$TU/.ssh/authorized_keys"; rm -f "$tmp"
+}
 
 # peers/N: pub=  name=(b64)  — 由它生成 wg 配置, 中枢重启不丢
 apply(){
@@ -42,7 +60,8 @@ apply(){
 cmd=${1:-}; shift || true
 case $cmd in
   info)
-    printf 'name=%s\nhost=%s\nnet=%s\nwg_port=%s\nhttp_port=%s\nsrvpub=%s\n' "${NAME:-}" "${HOST:-}" "$NET" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" ;;
+    printf 'name=%s\nhost=%s\nnet=%s\nwg_port=%s\nhttp_port=%s\nsrvpub=%s\nssh_port=%s\nsshkey=%s\n' "${NAME:-}" "${HOST:-}" "$NET" "$WG_PORT" "$HTTP_PORT" "$(cat "$S/server.pub")" \
+      "$(sshd -T 2>/dev/null | awk '$1=="port" && !p{print $2; p=1}' || true)" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)" ;;
   pool)
     POOL_DIR=/var/lib/custhub-pool python3 -I /usr/local/lib/custhub/pool.py list ;;
   reserve)
@@ -95,5 +114,24 @@ case $cmd in
       mkdir -p "$W/pkg/$(dirname "$f")"; mv -f "$t/$f" "$W/pkg/$f"; chmod 644 "$W/pkg/$f"
     done
     rm -rf "$t"; find "$W/pkg" -type d -exec chmod 755 {} + ;;
+  tun-set)
+    tn "$1"; k=$(printf '%s' "${2:-}" | base64 -d 2>/dev/null | tr -d '\r\n')
+    [[ $k =~ ^ssh-ed25519\ [A-Za-z0-9+/]{68}$ ]] || die "bad ssh key"
+    lock; mkdir -p "$S/tun"; printf '%s\n' "$k" >"$S/tun/$1"; tun_sync ;;
+  tun-del)
+    tn "$1"; lock; rm -f "$S/tun/$1"; tun_sync; "$0" kick "$1" >/dev/null 2>&1 || true ;;
+  tun-sync)
+    lock; tun_sync ;;
+  tun-list)
+    ls=$(ss -Hltn 2>/dev/null | awk '{print $4}')
+    for f in "$S"/tun/*; do
+      [ -f "$f" ] || continue; n=${f##*/}; p=$((TUN_BASE+n))
+      printf '%s\t%s\t%s\n' "$n" "$p" "$(grep -qx "127.0.0.1:$p" <<<"$ls" && echo 1 || echo 0)"
+    done ;;
+  kick)
+    tn "$1"; p=$((TUN_BASE+$1))
+    for pid in $(ss -Hltnp "sport = :$p" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+      [ "$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')" = "$TU" ] && kill "$pid" 2>/dev/null && echo "kicked $pid"
+    done; true ;;
   *) die "unknown command" ;;
 esac
