@@ -8,7 +8,7 @@ REPO='Zichao-xu/custhub'
 SUMS='009f7279a86a5a21b6a085ea4af0b44f2d0f6627e650544ce5c35a39628ce15b  install.sh
 3178d36171a0f941d4be722c26df487af616b59629bf8c56344efff7429ad8b7  custhub
 ae708e6c87b0f24215451c2968db4370fb4976182e4364ff3f4224d48d55509e  httpd.py
-0b4d6544815b707d4f83afcf92e57718e5d825034fc38ae61ef62ca6d38e001a  pool.py
+59d4d77213c89b91750898b37968e81be6094dfc694c080bf02802e3bc732a47  pool.py
 6f8be30062a18a3f10d708cde455647045b6a200111e310adcc44128e2e1187e  uninstall.sh'
 [ "$(id -u)" = 0 ] || { echo "要 root 跑(sudo -i 后再粘贴)" >&2; exit 1; }
 command -v curl >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl >/dev/null; }

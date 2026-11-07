@@ -80,6 +80,15 @@ def merge(incoming):
             if not old or m["ver"] > old.get("ver", -1):
                 m["seen"] = old.get("seen", 0) if old else 0
                 pool[m["host"]] = m
+        # 同一台中枢(服务器公钥相同)换了地址: 只留版本最新的那条
+        best = {}
+        for h, m in pool.items():
+            b = best.get(m["srvpub"])
+            if b is None or (m["host"] == me["host"]) or (pool[b]["host"] != me["host"] and m.get("ver", 0) > pool[b].get("ver", 0)):
+                best[m["srvpub"]] = h
+        for h in list(pool):
+            if best.get(pool[h]["srvpub"]) != h:
+                del pool[h]
         for h in list(pool):
             if pool[h].get("left") and now - pool[h].get("left", now) > 30 * 86400:
                 del pool[h]
