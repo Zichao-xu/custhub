@@ -27,6 +27,8 @@ rm -f /etc/systemd/system/custhub-fw.service /etc/systemd/system/custhub-http.se
       /etc/systemd/system/custhub-pool.service /etc/systemd/system/custhub-pool.timer \
       "/etc/wireguard/$IF.conf" /usr/local/sbin/custhub /usr/local/sbin/custhub-ssh /etc/sudoers.d/custhub
 rm -rf "/etc/systemd/system/wg-quick@$IF.service.d" "$S" "$W" "$R" "$P" "$L"
+# 管理端(Mac)的复用连接还挂着这个账号的进程时 userdel 会拒绝, 先结束它们
+for u in custhub custhub-www; do pkill -u "$u" 2>/dev/null; done; sleep 1
 id custhub >/dev/null 2>&1 && userdel -r custhub 2>/dev/null
 id custhub-www >/dev/null 2>&1 && userdel custhub-www 2>/dev/null
 systemctl daemon-reload
