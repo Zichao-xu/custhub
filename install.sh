@@ -226,7 +226,9 @@ EOF
 systemctl daemon-reload
 systemctl enable -q custhub-fw "wg-quick@$IF" custhub-http custhub-pool.timer
 systemctl restart custhub-fw
-systemctl restart "wg-quick@$IF" custhub-http
+# 隧道接口在跑就不重启(重启会让所有客户断开到下次重新握手), 配置由下面的 custhub sync 热更新
+systemctl is-active -q "wg-quick@$IF" || systemctl start "wg-quick@$IF"
+systemctl restart custhub-http
 systemctl restart custhub-pool.timer
 custhub sync   # 按 peers/ 重新生成 wg 配置(重装/升级后客户照常在)
 sleep 1
