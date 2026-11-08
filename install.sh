@@ -102,7 +102,10 @@ try: old=json.load(open(p))
 except Exception: old={}
 same=all(old.get(k)==v for k,v in new.items())
 new["joined"]=old.get("joined") or int(time.time())
-new["ver"]=old.get("ver",0)+(0 if same else 1)
+# ver 用时间戳: 卸载会删掉 self.json, 重装若从 1 计数会小于池里留下的下线墓碑, 被别的中枢当旧记录丢掉(永远进不了池)
+# 旧版是 1,2,3 计数(远小于时间戳), 升级时顺手迁到时间戳
+ov=old.get("ver",0)
+new["ver"]=ov if (same and ov>=1e9) else max(ov+1,int(time.time()))
 json.dump(new,open(p,"w"))
 PY
 chown "$UW:$UW" "$P/self.json"

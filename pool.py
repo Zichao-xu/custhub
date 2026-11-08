@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # pool.py — 中枢池: 中枢之间经公网 HTTP 互相报到、交换成员名单(无中心, 任意一台活着就能拿到全名单)
 #   每台中枢的成员记录: name host wg_port http_port srvpub net joined ver left
-#   合并规则: 同一 host 取 ver 大的那条(只有本人会改自己的记录并 ver+1; 下线= left=1 的墓碑, 30 天后清掉)
+#   合并规则: 同一 host 取 ver 大的那条(只有本人会改自己的记录, ver=改动时的时间戳, 重装后也一定更新; 下线= left=1 的墓碑, 30 天后清掉)
 #   鉴权: 池密钥 HMAC-SHA256(ts + "\n" + body), 时间差 10 分钟内有效; 请求和应答都签
 # 命令行(由 install.sh / 定时任务 / custhub 调用):
 #   pool.py probe SEED...      向种子取名单(不登记自己), 输出 JSON {pool, you}
@@ -166,7 +166,7 @@ def main(argv):
     if cmd in ("announce", "leave"):
         if cmd == "leave":
             me = self_rec()
-            me["ver"] += 1
+            me["ver"] = max(me["ver"] + 1, int(time.time()))  # 与 install.sh 一致: ver=时间戳
             me["left"] = int(time.time())
             with open(os.path.join(P, "self.json"), "w") as f:
                 json.dump(me, f)
