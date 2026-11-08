@@ -20,6 +20,8 @@ fi
 echo "… 通知中枢池: 本机下线"
 [ -f "$L/pool.py" ] && runuser -u custhub-www -- env POOL_DIR="$P" python3 -I "$L/pool.py" leave 2>/dev/null | tail -1
 systemctl disable --now custhub-pool.timer custhub-http "wg-quick@$IF" custhub-fw 2>/dev/null
+for u in /etc/systemd/system/custhub-node-*.socket; do [ -f "$u" ] && systemctl disable --now "${u##*/}" "$(basename "$u" .socket).service" 2>/dev/null; done
+rm -f /etc/systemd/system/custhub-node-*.socket /etc/systemd/system/custhub-node-*.service
 [ -x "$L/fw-passthru.sh" ] && "$L/fw-passthru.sh" stop
 nft delete table inet custhub 2>/dev/null
 ip link del "$IF" 2>/dev/null

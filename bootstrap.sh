@@ -5,11 +5,11 @@
 set -euo pipefail
 REF=${1:?缺版本}; TOKEN=${2:?缺入池令牌}
 REPO='Zichao-xu/custhub'
-SUMS='4dbeac5280e238777ac7fbd6d2795687cefb2eb3c2cc12accdfe7b12384695e3  install.sh
-ca431a4d865640e83734cd22686361847677f3f1ed445092450b3e4c34e71b1c  custhub
+SUMS='e5ec7a8f3402ace3382dc16390e7b0f33eb17586559eb223af6f87e09d945c7b  install.sh
+afd0899d3ec365fe7eb39c417e2e8ce2a8adfcd8ae7a5498fd00a9fedf264dfa  custhub
 ae708e6c87b0f24215451c2968db4370fb4976182e4364ff3f4224d48d55509e  httpd.py
 84ba9823fcd77c1c4758af4ebbb7b907b22f9ffeb2d85285297bf7cbe8e59d03  pool.py
-e2d52360b39abe35965d8062e6b8ce2b353068a27910e72246b7ec8b663a979c  uninstall.sh'
+9d6b1f9683619af242cb8ffa5b0074eb672cc65cfdae2b2a026a624b1379fd1c  uninstall.sh'
 [ "$(id -u)" = 0 ] || { echo "要 root 跑(sudo -i 后再粘贴)" >&2; exit 1; }
 command -v curl >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl >/dev/null; }
 

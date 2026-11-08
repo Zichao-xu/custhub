@@ -118,7 +118,7 @@ set -f   # 不做通配符展开
 exec sudo -n /usr/local/sbin/custhub $SSH_ORIGINAL_COMMAND
 EOF
 chmod 755 /usr/local/sbin/custhub-ssh
-printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub kick *\n' "$U" "$UT" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub kick *, /usr/local/sbin/custhub kick-node *\n' "$U" "$UT" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
 install -d -m700 -o "$U" -g "$U" "/home/$U/.ssh"
 echo "restrict,port-forwarding,command=\"/usr/local/sbin/custhub-ssh\" $ADMIN_KEY" >"/home/$U/.ssh/authorized_keys"
 chown "$U:$U" "/home/$U/.ssh/authorized_keys"; chmod 600 "/home/$U/.ssh/authorized_keys"
@@ -162,6 +162,11 @@ command -v iptables >/dev/null 2>&1 || exit 0
 for r in "-p udp --dport $WG_PORT" "-p tcp --dport $HTTP_PORT" "-i $IF"; do
     if [ "\$1" = stop ]; then iptables -D INPUT \$r -j ACCEPT 2>/dev/null
     else iptables -C INPUT \$r -j ACCEPT 2>/dev/null || iptables -I INPUT 1 \$r -j ACCEPT; fi
+done
+# 网络节点的公网端口(custhub node-set 开的), 开机/重装后补回
+for p in \$(cat $S/node/* 2>/dev/null | sed -n 's/^port=//p'); do
+    if [ "\$1" = stop ]; then iptables -D INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null
+    else iptables -C INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport \$p -j ACCEPT; fi
 done
 exit 0
 EOF
