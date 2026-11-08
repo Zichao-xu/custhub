@@ -194,7 +194,7 @@ case $cmd in
     ls=$(ss -Hltn 2>/dev/null | awk '{print $4}')
     for f in "$S"/node/*; do
       [ -f "$f" ] || continue; n=${f##*/}; p=$(sed -n 's/^port=//p' "$f")
-      printf '%s\t%s\t%s\t%s\n' "$n" "$p" "$(grep -qx "127.0.0.1:$((NODE_BASE+n))" <<<"$ls" && echo 1 || echo 0)" "$(grep -qE "[:*\]]$p\$" <<<"$ls" && echo 1 || echo 0)"
+      printf '%s\t%s\t%s\t%s\n' "$n" "$p" "$(grep -qx "127.0.0.1:$((NODE_BASE+n))" <<<"$ls" && echo 1 || echo 0)" "$(grep -qE ":$p\$" <<<"$ls" && echo 1 || echo 0)"
     done ;;
   upgrade)
     [[ ${1:-} =~ ^[0-9a-f]{40}$ ]] && [[ ${2:-} =~ ^[0-9a-f]{64}$ ]] || die "bad version"
