@@ -164,7 +164,7 @@ for r in "-p udp --dport $WG_PORT" "-p tcp --dport $HTTP_PORT" "-i $IF"; do
     else iptables -C INPUT \$r -j ACCEPT 2>/dev/null || iptables -I INPUT 1 \$r -j ACCEPT; fi
 done
 # 网络节点的公网端口(custhub node-set 开的), 开机/重装后补回
-for p in \$(cat $S/node/* 2>/dev/null | sed -n 's/^port=//p'); do
+for p in \$(cat $S/node/* 2>/dev/null | sed -n 's/^port2\{0,1\}=//p'); do
     if [ "\$1" = stop ]; then iptables -D INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null
     else iptables -C INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport \$p -j ACCEPT; fi
 done

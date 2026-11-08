@@ -23,9 +23,10 @@
 #   tun-sync                  按 tun/ 重写 custtun 的 authorized_keys
 #   kick N                    踢掉占着客户 N 回拨口的旧连接(客户机断线重连前自己调; 只踢 custtun 的进程)
 # 网络节点(把客户机当代理出口, 给指纹浏览器等用; 客户机自己用独立密钥 ssh -R 挂 127.0.0.1:23000+N, 本机公网端口转进去):
-#   node-set N PORT KEYB64    开/改客户 N 的节点: 公网 TCP PORT → 127.0.0.1:23000+N; KEYB64 = 客户机节点通道公钥
+#   node-set N PORT KEYB64 [PORT2]  开/改客户 N 的节点: 公网 TCP PORT → 127.0.0.1:23000+N(socks5/http);
+#                             可选 PORT2 → 127.0.0.1:24000+N(加密入口 shadowsocks); KEYB64 = 客户机节点通道公钥
 #   node-del N                关客户 N 的节点(撤公钥、关端口)
-#   node-list                 N  公网端口  通道是否在线(1/0)  公网端口是否在听(1/0)
+#   node-list                 N  公网端口  通道是否在线(1/0)  公网端口是否在听(1/0)  端口2  通道2  在听2(没开端口2 则为 - - -)
 #   kick-node N               踢掉占着客户 N 节点通道的旧连接(客户机节点守护重连前自己调)
 set -euo pipefail
 umask 022
@@ -38,7 +39,7 @@ tok(){ [[ $1 =~ ^[0-9a-f]{16,64}$ ]] || die "bad token"; }
 pub(){ [[ $1 =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "bad key"; }
 lock(){ exec 9>"$S/lock"; flock -w 20 9; }
 tn(){ [[ $1 =~ ^[0-9]{1,3}$ ]] && [ "$1" -ge 2 ] && [ "$1" -le 999 ] || die "bad client number"; }
-TUN_BASE=22000; TU=custtun; NODE_BASE=23000
+TUN_BASE=22000; TU=custtun; NODE_BASE=23000; NODE2_BASE=24000
 PROXYD=$(ls /lib/systemd/systemd-socket-proxyd /usr/lib/systemd/systemd-socket-proxyd 2>/dev/null | head -1 || true)
 # 杀掉 custtun 占着某端口的监听(只动 custtun 的进程)
 kick_port(){
@@ -65,7 +66,9 @@ tun_sync(){
   for f in "$S"/node/*; do
     [ -f "$f" ] || continue; n=${f##*/}; k=$(sed -n 's/^key=//p' "$f")
     [ -n "$k" ] || continue
-    printf 'restrict,port-forwarding,permitlisten="127.0.0.1:%s",command="sudo -n /usr/local/sbin/custhub kick-node %s" %s c-%s-node\n' "$((NODE_BASE+n))" "$n" "$k" "$n" >>"$tmp"
+    pl="permitlisten=\"127.0.0.1:$((NODE_BASE+n))\""
+    grep -q '^port2=[0-9]' "$f" && pl="$pl,permitlisten=\"127.0.0.1:$((NODE2_BASE+n))\""
+    printf 'restrict,port-forwarding,%s,command="sudo -n /usr/local/sbin/custhub kick-node %s" %s c-%s-node\n' "$pl" "$n" "$k" "$n" >>"$tmp"
   done
   install -m600 -o "$TU" -g "$TU" "$tmp" "/home/$TU/.ssh/authorized_keys"; rm -f "$tmp"
 }
@@ -159,42 +162,56 @@ case $cmd in
   kick)
     tn "$1"; kick_port $((TUN_BASE+$1)) ;;
   kick-node)
-    tn "$1"; kick_port $((NODE_BASE+$1)) ;;
+    tn "$1"; kick_port $((NODE_BASE+$1)); kick_port $((NODE2_BASE+$1)) ;;
   node-set)
-    tn "$1"; n=$1; p=${2:-}
-    [[ $p =~ ^[0-9]{4,5}$ ]] && [ "$p" -ge 1025 ] && [ "$p" -le 65000 ] || die "bad port"
-    case $p in "$WG_PORT"|"$HTTP_PORT"|22) die "port reserved" ;; esac
-    [ "$p" -ge "$TUN_BASE" ] && [ "$p" -lt $((NODE_BASE+1000)) ] && die "port in tunnel range"
+    tn "$1"; n=$1; p=${2:-}; p2=${4:-}
     k=$(printf '%s' "${3:-}" | base64 -d 2>/dev/null | tr -d '\r\n')
     [[ $k =~ ^ssh-ed25519\ [A-Za-z0-9+/]{68}$ ]] || die "bad ssh key"
     [ -n "$PROXYD" ] || die "no systemd-socket-proxyd"
     lock; mkdir -p "$S/node"
-    old=$(sed -n 's/^port=//p' "$S/node/$n" 2>/dev/null || true)
-    for f in "$S"/node/*; do [ -f "$f" ] && [ "${f##*/}" != "$n" ] && grep -qx "port=$p" "$f" && die "port used by node ${f##*/}"; done
-    if [ "$old" != "$p" ] && ss -Hltn "sport = :$p" | grep -q .; then die "port $p busy"; fi
-    printf 'port=%s\nkey=%s\n' "$p" "$k" >"$S/node/$n"; tun_sync
-    u=custhub-node-$n
-    printf '[Unit]\nDescription=custhub node c-%s public port\n[Socket]\nListenStream=%s\n[Install]\nWantedBy=sockets.target\n' "$n" "$p" >"/etc/systemd/system/$u.socket"
-    printf '[Unit]\nDescription=custhub node c-%s -> 127.0.0.1:%s\nRequires=%s.socket\nAfter=%s.socket\n[Service]\nExecStart=%s 127.0.0.1:%s\nDynamicUser=yes\nPrivateTmp=yes\nNoNewPrivileges=yes\n' \
-      "$n" "$((NODE_BASE+n))" "$u" "$u" "$PROXYD" "$((NODE_BASE+n))" >"/etc/systemd/system/$u.service"
+    old=$(sed -n 's/^port=//p' "$S/node/$n" 2>/dev/null || true); old2=$(sed -n 's/^port2=//p' "$S/node/$n" 2>/dev/null || true)
+    [ "$p" != "$p2" ] || die "two ports must differ"
+    for q in $p $p2; do
+      [[ $q =~ ^[0-9]{4,5}$ ]] && [ "$q" -ge 1025 ] && [ "$q" -le 65000 ] || die "bad port $q"
+      case $q in "$WG_PORT"|"$HTTP_PORT"|22) die "port $q reserved" ;; esac
+      [ "$q" -ge "$TUN_BASE" ] && [ "$q" -lt $((NODE2_BASE+1000)) ] && die "port $q in tunnel range"
+      for f in "$S"/node/*; do [ -f "$f" ] && [ "${f##*/}" != "$n" ] && grep -qxE "port2?=$q" "$f" && die "port $q used by node ${f##*/}"; done
+      if [ "$q" != "$old" ] && [ "$q" != "$old2" ] && ss -Hltn "sport = :$q" | grep -q .; then die "port $q busy"; fi
+    done
+    printf 'port=%s\nkey=%s\nport2=%s\n' "$p" "$k" "$p2" >"$S/node/$n"; tun_sync
+    # 每个公网端口一对 systemd socket+proxyd: custhub-node-N(→23000+N), custhub-node-N-2(→24000+N)
+    unit(){  # unit 后缀 公网端口 本机端口
+      local u=custhub-node-$n$1
+      printf '[Unit]\nDescription=custhub node c-%s public port\n[Socket]\nListenStream=%s\n[Install]\nWantedBy=sockets.target\n' "$n" "$2" >"/etc/systemd/system/$u.socket"
+      printf '[Unit]\nDescription=custhub node c-%s -> 127.0.0.1:%s\nRequires=%s.socket\nAfter=%s.socket\n[Service]\nExecStart=%s 127.0.0.1:%s\nDynamicUser=yes\nPrivateTmp=yes\nNoNewPrivileges=yes\n' \
+        "$n" "$3" "$u" "$u" "$PROXYD" "$3" >"/etc/systemd/system/$u.service"
+    }
+    unit_off(){ systemctl disable -q --now "custhub-node-$n$1.socket" "custhub-node-$n$1.service" 2>/dev/null || true; rm -f "/etc/systemd/system/custhub-node-$n$1".{socket,service}; }
+    if [ -n "$old" ] && [ "$old" != "$p" ]; then node_ipt del "$old"; unit_off ""; fi
+    if [ -n "$old2" ] && [ "$old2" != "$p2" ]; then node_ipt del "$old2"; unit_off "-2"; fi
+    unit "" "$p" $((NODE_BASE+n)); [ -n "$p2" ] && unit "-2" "$p2" $((NODE2_BASE+n))
     systemctl daemon-reload
-    if [ -n "$old" ] && [ "$old" != "$p" ]; then node_ipt del "$old"; systemctl stop "$u.service" "$u.socket" 2>/dev/null || true; fi
-    node_ipt add "$p"
-    systemctl enable -q --now "$u.socket"
-    echo "ok $p" ;;
+    node_ipt add "$p"; systemctl enable -q --now "custhub-node-$n.socket"
+    if [ -n "$p2" ]; then node_ipt add "$p2"; systemctl enable -q --now "custhub-node-$n-2.socket"; fi
+    echo "ok $p $p2" ;;
   node-del)
     tn "$1"; n=$1; lock
-    p=$(sed -n 's/^port=//p' "$S/node/$n" 2>/dev/null || true)
-    systemctl disable -q --now "custhub-node-$n.socket" "custhub-node-$n.service" 2>/dev/null || true
-    rm -f "/etc/systemd/system/custhub-node-$n.socket" "/etc/systemd/system/custhub-node-$n.service"; systemctl daemon-reload
-    [ -n "$p" ] && node_ipt del "$p"
-    rm -f "$S/node/$n"; tun_sync; kick_port $((NODE_BASE+n)) >/dev/null
+    for x in "" "-2"; do
+      systemctl disable -q --now "custhub-node-$n$x.socket" "custhub-node-$n$x.service" 2>/dev/null || true
+      rm -f "/etc/systemd/system/custhub-node-$n$x.socket" "/etc/systemd/system/custhub-node-$n$x.service"
+    done
+    systemctl daemon-reload
+    for q in $(sed -n 's/^port2\{0,1\}=//p' "$S/node/$n" 2>/dev/null); do node_ipt del "$q"; done
+    rm -f "$S/node/$n"; tun_sync; kick_port $((NODE_BASE+n)) >/dev/null; kick_port $((NODE2_BASE+n)) >/dev/null
     echo ok ;;
   node-list)
     ls=$(ss -Hltn 2>/dev/null | awk '{print $4}')
+    up(){ grep -qx "127.0.0.1:$1" <<<"$ls" && echo 1 || echo 0; }
+    pub(){ grep -qE ":$1\$" <<<"$ls" && echo 1 || echo 0; }
     for f in "$S"/node/*; do
-      [ -f "$f" ] || continue; n=${f##*/}; p=$(sed -n 's/^port=//p' "$f")
-      printf '%s\t%s\t%s\t%s\n' "$n" "$p" "$(grep -qx "127.0.0.1:$((NODE_BASE+n))" <<<"$ls" && echo 1 || echo 0)" "$(grep -qE ":$p\$" <<<"$ls" && echo 1 || echo 0)"
+      [ -f "$f" ] || continue; n=${f##*/}; p=$(sed -n 's/^port=//p' "$f"); p2=$(sed -n 's/^port2=//p' "$f")
+      if [ -n "$p2" ]; then x=$(printf '%s\t%s\t%s' "$p2" "$(up $((NODE2_BASE+n)))" "$(pub "$p2")"); else x=$(printf -- '-\t-\t-'); fi
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$p" "$(up $((NODE_BASE+n)))" "$(pub "$p")" "$x"
     done ;;
   upgrade)
     [[ ${1:-} =~ ^[0-9a-f]{40}$ ]] && [[ ${2:-} =~ ^[0-9a-f]{64}$ ]] || die "bad version"
