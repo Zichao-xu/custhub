@@ -205,9 +205,10 @@ for line in sys.stdin:
     ls=$(ss -Hltnp 2>/dev/null); es=$(ss -Htnp state established 2>/dev/null)
     for f in "$S"/tun/*; do
       [ -f "$f" ] || continue; n=${f##*/}; p=$((TUN_BASE+n)); up=0; peer=-
-      pid=$(awk -v a="127.0.0.1:$p" '$4==a' <<<"$ls" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+      # 注意 set -e + pipefail: 找不到(客户离线)时 grep 返回 1 会让整个命令中途退出, 后面的客户全丢 → 必须 || true
+      pid=$(awk -v a="127.0.0.1:$p" '$4==a' <<<"$ls" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)
       if [ -n "$pid" ]; then up=1
-        peer=$(grep "pid=$pid," <<<"$es" | awk '$3 ~ /:22$/ {print $4; exit}')
+        peer=$(grep "pid=$pid," <<<"$es" | awk '$3 ~ /:22$/ {print $4; exit}' || true)
         peer=${peer%:*}; peer=${peer#[}; peer=${peer%]}; peer=${peer#::ffff:}; peer=${peer:--}
       fi
       printf '%s\t%s\t%s\t%s\n' "$n" "$p" "$up" "$peer"
