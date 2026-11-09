@@ -13,7 +13,7 @@ set -euo pipefail
 SRC=$(cd "$(dirname "$0")" && pwd)
 TOKEN=${1:?缺入池令牌(在 Mac 上跑 hub/join-cmd.sh 生成整条命令)}
 S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; P=/var/lib/custhub-pool
-L=/usr/local/lib/custhub; IF=cust0; U=custhub; UW=custhub-www; UT=custtun
+L=/usr/local/lib/custhub; IF=cust0; U=custhub; UW=custhub-www; UT=custtun; UR=custrep
 say(){ echo "[custhub] $*"; }
 
 # ---- 解令牌 ----
@@ -42,6 +42,17 @@ id "$UW" >/dev/null 2>&1 || useradd --system --no-create-home --home-dir /nonexi
 # 客户机挂反向隧道用; shell 必须是 /bin/sh(授权里的强制命令要靠它执行), 但授权行禁了终端, 登不进来
 id "$UT" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/home/$UT" --shell /bin/sh "$UT"
 install -d -m700 -o "$UT" -g "$UT" "/home/$UT/.ssh"
+# 进度回报备用通道(客户机 HTTP 回报被代理弄丢时走 ssh 22): 每次接入一把一次性钥匙, 强制命令只能写那一次的回报
+id "$UR" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/home/$UR" --shell /bin/sh "$UR"
+install -d -m700 -o "$UR" -g "$UR" "/home/$UR/.ssh"
+cat >/usr/local/sbin/custrep-ssh <<'EOF'
+#!/bin/sh
+# custrep 的强制命令: $1 = 本次接入的码(写死在授权行里), 客户机只能选 log / fail
+set -f
+case "$SSH_ORIGINAL_COMMAND" in log|fail) ;; *) echo "ERR bad mode" >&2; exit 1 ;; esac
+exec sudo -n /usr/local/sbin/custhub rep-in "$1" "$SSH_ORIGINAL_COMMAND"
+EOF
+chmod 755 /usr/local/sbin/custrep-ssh
 
 # ---- 程序 ----
 install -d -m755 "$L"
@@ -118,7 +129,7 @@ set -f   # 不做通配符展开
 exec sudo -n /usr/local/sbin/custhub $SSH_ORIGINAL_COMMAND
 EOF
 chmod 755 /usr/local/sbin/custhub-ssh
-printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub kick *, /usr/local/sbin/custhub kick-node *\n' "$U" "$UT" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub kick *, /usr/local/sbin/custhub kick-node *\n%s ALL=(root) NOPASSWD: /usr/local/sbin/custhub rep-in *\n' "$U" "$UT" "$UR" >/etc/sudoers.d/custhub; chmod 440 /etc/sudoers.d/custhub
 install -d -m700 -o "$U" -g "$U" "/home/$U/.ssh"
 echo "restrict,port-forwarding,command=\"/usr/local/sbin/custhub-ssh\" $ADMIN_KEY" >"/home/$U/.ssh/authorized_keys"
 chown "$U:$U" "/home/$U/.ssh/authorized_keys"; chmod 600 "/home/$U/.ssh/authorized_keys"
@@ -149,6 +160,8 @@ table inet custhub {
         meta skuid "$U" reject
         meta skuid "$UT" ct state established,related accept
         meta skuid "$UT" reject
+        meta skuid "$UR" ct state established,related accept
+        meta skuid "$UR" reject
     }
 }
 EOF
@@ -250,6 +263,7 @@ systemctl restart custhub-http
 systemctl restart custhub-pool.timer
 custhub sync       # 按 peers/ 重新生成 wg 配置(重装/升级后客户照常在)
 custhub tun-sync   # 按 tun/ 重写反向隧道授权
+custhub rep-close 0000000000000000 >/dev/null 2>&1 || true   # 顺带按 rep/ 重写回报钥匙授权(清掉过期的)
 sleep 1
 systemctl is-active -q custhub-http "wg-quick@$IF" custhub-fw || { say "服务没起来:"; systemctl --no-pager status custhub-http "wg-quick@$IF" custhub-fw | tail -30; exit 1; }
 

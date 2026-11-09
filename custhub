@@ -19,7 +19,7 @@
 # 反向隧道(客户机用 custtun 账号 ssh -R 挂回拨口 127.0.0.1:22000+N, N = Mac 上的全局别名号 c-N):
 #   tun-set N KEYB64          登记/更新客户 N 的 ssh 公钥(base64 的 "ssh-ed25519 AAAA...")
 #   tun-del N                 撤销客户 N
-#   tun-list                  N  回拨口  是否在线(1/0)
+#   tun-list                  N  回拨口  是否在线(1/0)  来源公网地址(不在线为 -)
 #   tun-sync                  按 tun/ 重写 custtun 的 authorized_keys
 #   kick N                    踢掉占着客户 N 回拨口的旧连接(客户机断线重连前自己调; 只踢 custtun 的进程)
 # 网络节点(把客户机当代理出口, 给指纹浏览器等用; 客户机自己用独立密钥 ssh -R 挂 127.0.0.1:23000+N, 本机公网端口转进去):
@@ -28,6 +28,10 @@
 #   node-del N                关客户 N 的节点(撤公钥、关端口)
 #   node-list                 N  公网端口  通道是否在线(1/0)  公网端口是否在听(1/0)  端口2  通道2  在听2(没开端口2 则为 - - -)
 #   kick-node N               踢掉占着客户 N 节点通道的旧连接(客户机节点守护重连前自己调)
+# 进度回报的 SSH 备用通道(客户机开着代理、HTTP 回报被弄丢时用; 账号 custrep, 每次接入一把一次性钥匙, 只能写这一次的回报):
+#   rep-open TOKEN KEYB64     登记本次接入的回报钥匙(池里每台中枢都登记, 客户机哪台能连用哪台)
+#   rep-close TOKEN           撤销(job-rm 也会撤); 超过 3 小时的自动清掉
+#   rep-in TOKEN log|fail     custrep 的强制命令调用: stdin 每行 "步骤<TAB>说明[<TAB>用户 机器名]" 追加到回报; fail = stdin 是失败日志尾
 set -euo pipefail
 umask 022
 S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; IF=cust0
@@ -39,7 +43,7 @@ tok(){ [[ $1 =~ ^[0-9a-f]{16,64}$ ]] || die "bad token"; }
 pub(){ [[ $1 =~ ^[A-Za-z0-9+/]{43}=$ ]] || die "bad key"; }
 lock(){ exec 9>"$S/lock"; flock -w 20 9; }
 tn(){ [[ $1 =~ ^[0-9]{1,3}$ ]] && [ "$1" -ge 2 ] && [ "$1" -le 999 ] || die "bad client number"; }
-TUN_BASE=22000; TU=custtun; NODE_BASE=23000; NODE2_BASE=24000
+TUN_BASE=22000; TU=custtun; NODE_BASE=23000; NODE2_BASE=24000; RU=custrep; UW=custhub-www
 PROXYD=$(ls /lib/systemd/systemd-socket-proxyd /usr/lib/systemd/systemd-socket-proxyd 2>/dev/null | head -1 || true)
 # 杀掉 custtun 占着某端口的监听(只动 custtun 的进程)
 kick_port(){
@@ -71,6 +75,19 @@ tun_sync(){
     printf 'restrict,port-forwarding,%s,command="sudo -n /usr/local/sbin/custhub kick-node %s" %s c-%s-node\n' "$pl" "$n" "$k" "$n" >>"$tmp"
   done
   install -m600 -o "$TU" -g "$TU" "$tmp" "/home/$TU/.ssh/authorized_keys"; rm -f "$tmp"
+}
+
+# 回报钥匙: rep/TOKEN 一行公钥, 生成 custrep 的 authorized_keys(强制命令只能写自己这次的回报, 不能转发、不能开终端)
+rep_sync(){
+  local f t tmp
+  mkdir -p "$S/rep"; tmp=$(mktemp)
+  find "$S/rep" -type f -mmin +180 -delete 2>/dev/null || true
+  for f in "$S"/rep/*; do
+    [ -f "$f" ] || continue; t=${f##*/}
+    printf 'restrict,command="/usr/local/sbin/custrep-ssh %s" %s rep-%s\n' "$t" "$(cat "$f")" "$t" >>"$tmp"
+  done
+  id "$RU" >/dev/null 2>&1 && install -m600 -o "$RU" -g "$RU" "$tmp" "/home/$RU/.ssh/authorized_keys"
+  rm -f "$tmp"
 }
 
 # peers/N: pub=  name=(b64)  — 由它生成 wg 配置, 中枢重启不丢
@@ -106,7 +123,7 @@ case $cmd in
     [ -f "$S/peers/$1" ] || die "not reserved"
     sed -i "s|^pub=.*|pub=$2|" "$S/peers/$1"; apply ;;
   name)
-    num "$1"; [[ $2 =~ ^[A-Za-z0-9+/=]{1,400}$ ]] || die "bad name"; lock
+    num "$1"; [[ ${2:-} =~ ^[A-Za-z0-9+/=]{1,400}$ ]] || die "bad name"; lock
     [ -f "$S/peers/$1" ] && sed -i "s|^name=.*|name=$2|" "$S/peers/$1" ;;
   drop)
     num "$1"; lock
@@ -127,7 +144,37 @@ case $cmd in
     for f in "$1.ps1" "$1.m.ps1" "$1.sh"; do [ -f "$t/$f" ] || die "missing $f"; install -m644 "$t/$f" "$W/j/$f"; done
     rm -rf "$t" ;;
   job-rm)
-    tok "$1"; rm -f "$W/j/$1".ps1 "$W/j/$1".m.ps1 "$W/j/$1".sh "$R/$1".* ;;
+    tok "$1"; rm -f "$W/j/$1".ps1 "$W/j/$1".m.ps1 "$W/j/$1".sh "$R/$1".*
+    if [ -f "$S/rep/$1" ]; then lock; rm -f "$S/rep/$1"; rep_sync; fi ;;
+  rep-open)
+    tok "$1"; k=$(printf '%s' "${2:-}" | base64 -d 2>/dev/null | tr -d '\r\n')
+    [[ $k =~ ^ssh-ed25519\ [A-Za-z0-9+/]{68}$ ]] || die "bad ssh key"
+    id "$RU" >/dev/null 2>&1 || die "no $RU account (old hub version)"
+    lock; mkdir -p "$S/rep"; printf '%s\n' "$k" >"$S/rep/$1"; rep_sync; echo ok ;;
+  rep-close)
+    tok "$1"; lock; rm -f "$S/rep/$1"; rep_sync; rm -f "$R/$1".* ;;
+  rep-in)
+    tok "$1"; [ -f "$S/rep/$1" ] || die "no such job"
+    case ${2:-} in
+      log)
+        # 和 HTTP 回报同一格式落盘: "时间 步骤 说明(URL 编码)"; done 另写 .done "用户 机器名"
+        head -c 65536 | head -n 300 | python3 -Ic '
+import sys,time,urllib.parse as u,re
+r=sys.argv[1]; q=lambda x:u.quote(x,safe="")[:1500]
+for line in sys.stdin:
+    p=line.rstrip("\r\n").split("\t")
+    s=re.sub(r"[^a-z0-9-]","",p[0])[:20]
+    if not s: continue
+    m=p[1] if len(p)>1 else ""
+    open(r+".log","a").write("%d %s %s\n"%(time.time(),s,q(m)))
+    if s=="done":
+        uh=(p[2] if len(p)>2 else "").split(" ",1)+[""]
+        open(r+".done","w").write("%s %s\n"%(q(uh[0]),q(uh[1])))
+' "$R/$1" ;;
+      fail) head -c 24576 >"$R/$1.fail" ;;
+      *) die "bad mode" ;;
+    esac
+    chown "$UW:$UW" "$R/$1".* 2>/dev/null || true; echo ok ;;
   report)
     tok "$1"; [[ $2 =~ ^[0-9]+$ ]] || die "bad offset"
     tail -n +"$2" "$R/$1.log" 2>/dev/null || true ;;
@@ -154,10 +201,16 @@ case $cmd in
   tun-sync)
     lock; tun_sync ;;
   tun-list)
-    ls=$(ss -Hltn 2>/dev/null | awk '{print $4}')
+    # 第 4 列 = 这条反向通道从哪个公网地址连进来的(持有回拨口的 sshd 进程自己那条连接的对端), 供 Mac 试直连; 不在线为 -
+    ls=$(ss -Hltnp 2>/dev/null); es=$(ss -Htnp state established 2>/dev/null)
     for f in "$S"/tun/*; do
-      [ -f "$f" ] || continue; n=${f##*/}; p=$((TUN_BASE+n))
-      printf '%s\t%s\t%s\n' "$n" "$p" "$(grep -qx "127.0.0.1:$p" <<<"$ls" && echo 1 || echo 0)"
+      [ -f "$f" ] || continue; n=${f##*/}; p=$((TUN_BASE+n)); up=0; peer=-
+      pid=$(awk -v a="127.0.0.1:$p" '$4==a' <<<"$ls" | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+      if [ -n "$pid" ]; then up=1
+        peer=$(grep "pid=$pid," <<<"$es" | awk '$3 ~ /:22$/ {print $4; exit}')
+        peer=${peer%:*}; peer=${peer#[}; peer=${peer%]}; peer=${peer#::ffff:}; peer=${peer:--}
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$n" "$p" "$up" "$peer"
     done ;;
   kick)
     tn "$1"; kick_port $((TUN_BASE+$1)) ;;

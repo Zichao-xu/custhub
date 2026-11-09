@@ -27,11 +27,12 @@ nft delete table inet custhub 2>/dev/null
 ip link del "$IF" 2>/dev/null
 rm -f /etc/systemd/system/custhub-fw.service /etc/systemd/system/custhub-http.service \
       /etc/systemd/system/custhub-pool.service /etc/systemd/system/custhub-pool.timer \
-      "/etc/wireguard/$IF.conf" /usr/local/sbin/custhub /usr/local/sbin/custhub-ssh /etc/sudoers.d/custhub
+      "/etc/wireguard/$IF.conf" /usr/local/sbin/custhub /usr/local/sbin/custhub-ssh /usr/local/sbin/custrep-ssh /etc/sudoers.d/custhub
 rm -rf "/etc/systemd/system/wg-quick@$IF.service.d" "$S" "$W" "$R" "$P" "$L"
 # 管理端(Mac)的复用连接还挂着这个账号的进程时 userdel 会拒绝, 先结束它们
-for u in custhub custhub-www custtun; do pkill -u "$u" 2>/dev/null; done; sleep 1
+for u in custhub custhub-www custtun custrep; do pkill -u "$u" 2>/dev/null; done; sleep 1
 id custtun >/dev/null 2>&1 && userdel -r custtun 2>/dev/null
+id custrep >/dev/null 2>&1 && userdel -r custrep 2>/dev/null
 id custhub >/dev/null 2>&1 && userdel -r custhub 2>/dev/null
 id custhub-www >/dev/null 2>&1 && userdel custhub-www 2>/dev/null
 systemctl daemon-reload
