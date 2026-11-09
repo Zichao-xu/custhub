@@ -1,19 +1,20 @@
 #!/bin/bash
 # install.sh '<入池令牌 CH1:...>' — 在任意 Debian/Ubuntu 公网机上装/升级客户接入中枢(root, 幂等, 重跑不丢客户)
 # 一般不直接跑, 由 bootstrap.sh 下载校验后调用; 令牌由 Mac 上 hub/join-cmd.sh 生成(含池密钥 + Mac 管理公钥 + 已知中枢)
-# 可选环境变量(只在首次安装生效): HUB_NAME  HUB_HOST(公网地址, 默认自动探测)  WG_PORT(51820)  HTTP_PORT(8443)
+# 可选环境变量(只在首次安装生效): HUB_NAME  HUB_HOST(公网地址, 默认自动探测)  HTTP_PORT(8443)
 #
 # 中枢做四件事:
-#   1. WireGuard cust0: 客户机拨进来, 每台一个 /32; 客户之间、客户→中枢新建连接一律不通
+#   1. 反向通道: 客户机用受限账号 custtun 挂回拨口 127.0.0.1:22000+N(只能挂自己的口, 出站封死)
 #   2. HTTP: 下发接入脚本/安装包 + 收进度回报 + 中枢池报到(httpd.py / pool.py)
-#   3. ssh 受限账号 custhub: Mac 只能 (a) 调 custhub 管理命令 (b) 端口转发到客户网段(ssh -J 跳板)
+#   3. ssh 受限账号 custhub: Mac 只能 (a) 调 custhub 管理命令 (b) 端口转发到本机回拨口(跳板)
 #   4. 入池: 向已知中枢报到并定时互换名单, Mac 从任意一台活着的中枢拿到全名单(新中枢热加入, 不用改 Mac 配置)
+# (旧版还有 WireGuard cust0 加速通道, 2026-11-09 停用; 升级时自动拆掉)
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "要 root 跑" >&2; exit 1; }
 SRC=$(cd "$(dirname "$0")" && pwd)
 TOKEN=${1:?缺入池令牌(在 Mac 上跑 hub/join-cmd.sh 生成整条命令)}
 S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; P=/var/lib/custhub-pool
-L=/usr/local/lib/custhub; IF=cust0; U=custhub; UW=custhub-www; UT=custtun; UR=custrep
+L=/usr/local/lib/custhub; U=custhub; UW=custhub-www; UT=custtun; UR=custrep
 say(){ echo "[custhub] $*"; }
 
 # ---- 解令牌 ----
@@ -29,12 +30,11 @@ print("POOL_KEY=%s ADMIN_KEY=%s SEEDS=%s" % (k,shlex.quote(a),shlex.quote(" ".jo
 ' "$TOKEN" 2>/dev/null)" || { echo "令牌内容无效" >&2; exit 1; }
 
 # ---- 依赖(装过就跳过; apt 源用机器自己的配置) ----
-miss=; for c in wg wg-quick nft flock curl; do command -v $c >/dev/null || miss=1; done
+miss=; for c in nft flock curl; do command -v $c >/dev/null || miss=1; done
 if [ -n "$miss" ]; then
-  say "安装 wireguard-tools nftables curl"
-  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq wireguard-tools nftables util-linux curl >/dev/null
+  say "安装 nftables curl"
+  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables util-linux curl >/dev/null
 fi
-modprobe wireguard 2>/dev/null || true
 
 # ---- 账号 ----
 id "$U" >/dev/null 2>&1 || useradd --system --create-home --home-dir "/home/$U" --shell /bin/sh "$U"
@@ -59,12 +59,12 @@ install -d -m755 "$L"
 install -m755 "$SRC/custhub" /usr/local/sbin/custhub
 install -m644 "$SRC/httpd.py" "$SRC/pool.py" "$L/"
 install -m755 "$SRC/uninstall.sh" "$L/uninstall.sh"
-mkdir -p "$S/peers" "$W/j" "$W/pkg" "$R" "$P" /etc/wireguard
+mkdir -p "$S" "$W/j" "$W/pkg" "$R" "$P"
 chmod 700 "$S"; chmod 755 "$W" "$W/j" "$W/pkg"
 chown -R "$UW:$UW" "$R" "$P"; chmod 750 "$R"; chmod 700 "$P"   # 旧版回报目录属主是 nobody, 一并改
 (umask 077; printf '%s\n' "$POOL_KEY" >"$P/pool.key"); chown "$UW:$UW" "$P/pool.key"
-[ -f "$S/server.key" ] || { (umask 077; wg genkey >"$S/server.key"); }
-wg pubkey <"$S/server.key" >"$S/server.pub"
+# 中枢身份(池里按它去重, 字段名沿用 srvpub): 旧版是 WG 公钥, 有就沿用; 新装取 32 字节随机数
+[ -s "$S/server.pub" ] || head -c32 /dev/urandom | base64 >"$S/server.pub"
 pyp(){ runuser -u "$UW" -- env POOL_DIR="$P" python3 -I "$L/pool.py" "$@"; }
 
 # ---- 设置: 首次安装时定下, 之后以已存的为准(改网段/端口会让已接入客户失效) ----
@@ -99,7 +99,6 @@ WG_PORT=${WG_PORT:-51820}; HTTP_PORT=${HTTP_PORT:-8443}
 # 版本/仓库: 由 bootstrap 传入, 供 Mac 远程升级时判断是否升好、从哪拉
 VERSION=${CUSTHUB_REF:-$VERSION}; REPO=${CUSTHUB_REPO:-$REPO}
 printf 'NET=%s\nWG_PORT=%s\nHTTP_PORT=%s\nHOST=%s\nNAME=%s\nVERSION=%s\nREPO=%s\n' "$NET" "$WG_PORT" "$HTTP_PORT" "$HOST" "$NAME" "$VERSION" "$REPO" >"$S/settings"
-if ! systemctl is-active -q "wg-quick@$IF" 2>/dev/null && ss -lnuH "sport = :$WG_PORT" | grep -q .; then say "警告: UDP $WG_PORT 已被别的程序占用"; fi
 if ! systemctl is-active -q custhub-http 2>/dev/null && ss -lntH "sport = :$HTTP_PORT" | grep -q .; then say "警告: TCP $HTTP_PORT 已被别的程序占用"; fi
 
 # 本机在池里的记录(字段变了才 ver+1, 免得别人收到无意义的更新)
@@ -121,7 +120,7 @@ json.dump(new,open(p,"w"))
 PY
 chown "$UW:$UW" "$P/self.json"
 
-# ---- 管理账号: 只能跑 custhub + 端口转发; 出站被 nft 限死在客户网段 ----
+# ---- 管理账号: 只能跑 custhub + 端口转发; 出站被 nft 限死在本机回环(回拨口) ----
 cat >/usr/local/sbin/custhub-ssh <<'EOF'
 #!/bin/sh
 # 管理账号的强制命令: 原样转给 custhub(由它做参数白名单校验); 跳板转发(ssh -J)不经过这里
@@ -142,21 +141,10 @@ cat >"$S/fw.nft" <<EOF
 table inet custhub
 delete table inet custhub
 table inet custhub {
-    chain input {
-        type filter hook input priority -10; policy accept;
-        iifname "$IF" ct state established,related accept
-        iifname "$IF" drop
-    }
-    chain forward {
-        type filter hook forward priority -10; policy accept;
-        iifname "$IF" drop
-        oifname "$IF" drop
-    }
     chain output {
         type filter hook output priority -10; policy accept;
         meta skuid "$U" oifname "lo" accept
         meta skuid "$U" ct state established,related accept
-        meta skuid "$U" oifname "$IF" ip daddr $NET.0/24 accept
         meta skuid "$U" reject
         meta skuid "$UT" ct state established,related accept
         meta skuid "$UT" reject
@@ -167,12 +155,12 @@ table inet custhub {
 EOF
 nft -c -f "$S/fw.nft"
 # nft 的 accept 只在本表生效: 宿主机若有别家的 INPUT DROP(ufw/firewalld/云镜像自带, iptables-nft 表), 照样会被丢。
-# 探测到 iptables 才加放行, 没有就跳过; 只放中枢自己的两个端口和 cust0
+# 探测到 iptables 才加放行, 没有就跳过; 只放中枢自己的 HTTP 端口
 [ -x "$L/fw-passthru.sh" ] && "$L/fw-passthru.sh" stop   # 端口可能变过, 先撤旧规则
 cat >"$L/fw-passthru.sh" <<EOF
 #!/bin/sh
 command -v iptables >/dev/null 2>&1 || exit 0
-for r in "-p udp --dport $WG_PORT" "-p tcp --dport $HTTP_PORT" "-i $IF"; do
+for r in "-p tcp --dport $HTTP_PORT"; do
     if [ "\$1" = stop ]; then iptables -D INPUT \$r -j ACCEPT 2>/dev/null
     else iptables -C INPUT \$r -j ACCEPT 2>/dev/null || iptables -I INPUT 1 \$r -j ACCEPT; fi
 done
@@ -190,7 +178,6 @@ cat >/etc/systemd/system/custhub-fw.service <<EOF
 [Unit]
 Description=custhub firewall
 After=network-pre.target nftables.service ufw.service firewalld.service docker.service
-Before=wg-quick@$IF.service
 
 [Service]
 Type=oneshot
@@ -203,8 +190,6 @@ ExecStop=-/usr/sbin/nft delete table inet custhub
 [Install]
 WantedBy=multi-user.target
 EOF
-mkdir -p "/etc/systemd/system/wg-quick@$IF.service.d"
-printf '[Unit]\nRequires=custhub-fw.service\nAfter=custhub-fw.service\n' >"/etc/systemd/system/wg-quick@$IF.service.d/custhub.conf"
 cat >/etc/systemd/system/custhub-http.service <<EOF
 [Unit]
 Description=custhub http (scripts, packages, progress reports, pool)
@@ -251,28 +236,30 @@ RandomizedDelaySec=30
 WantedBy=timers.target
 EOF
 
-# wg 配置由 custhub 按 peers/ 生成(先写一份最小的, 让 wg-quick 能起)
-[ -f "/etc/wireguard/$IF.conf" ] || { printf '[Interface]\nAddress = %s.1/24\nListenPort = %s\nPrivateKey = %s\n' "$NET" "$WG_PORT" "$(cat "$S/server.key")" >"/etc/wireguard/$IF.conf"; chmod 600 "/etc/wireguard/$IF.conf"; }
+# 旧版的 WireGuard 加速通道(cust0)拆掉: 先去掉它对防火墙的依赖, 再停; 反向通道不受影响
+if [ -e /etc/systemd/system/wg-quick@cust0.service.d ] || [ -f /etc/wireguard/cust0.conf ]; then
+  rm -rf /etc/systemd/system/wg-quick@cust0.service.d; systemctl daemon-reload
+  systemctl disable --now wg-quick@cust0 2>/dev/null || true; ip link del cust0 2>/dev/null || true
+  rm -f /etc/wireguard/cust0.conf "$S/server.key"; rm -rf "$S/peers"
+  say "已拆除旧的 WireGuard 加速通道(cust0)"
+fi
 systemctl daemon-reload
-systemctl enable -q custhub-fw "wg-quick@$IF" custhub-http custhub-pool.timer
-# 防火墙: 在跑就直接重载规则; 不能 restart —— wg-quick 对它是 Requires, restart 会连带重启隧道, 所有客户掉线
+systemctl enable -q custhub-fw custhub-http custhub-pool.timer
+# 防火墙: 在跑就直接重载规则(不必 restart, 免得规则有一瞬间是空的)
 if systemctl is-active -q custhub-fw; then nft -f "$S/fw.nft" && "$L/fw-passthru.sh"; else systemctl start custhub-fw; fi
-# 隧道接口在跑就不重启(重启会让所有客户断开到下次重新握手), 配置由下面的 custhub sync 热更新
-systemctl is-active -q "wg-quick@$IF" || systemctl start "wg-quick@$IF"
 systemctl restart custhub-http
 systemctl restart custhub-pool.timer
-custhub sync       # 按 peers/ 重新生成 wg 配置(重装/升级后客户照常在)
 custhub tun-sync   # 按 tun/ 重写反向隧道授权
 custhub rep-close 0000000000000000 >/dev/null 2>&1 || true   # 顺带按 rep/ 重写回报钥匙授权(清掉过期的)
 sleep 1
-systemctl is-active -q custhub-http "wg-quick@$IF" custhub-fw || { say "服务没起来:"; systemctl --no-pager status custhub-http "wg-quick@$IF" custhub-fw | tail -30; exit 1; }
+systemctl is-active -q custhub-http custhub-fw || { say "服务没起来:"; systemctl --no-pager status custhub-http custhub-fw | tail -30; exit 1; }
 
 # ---- 入池 ----
 r=$(pyp announce $SEEDS 2>/dev/null | tail -1 || true)
 n=$(pyp list | awk -F'\t' '$9=="0"' | wc -l)
-say "完成: $NAME  $HOST  网段 $NET.0/24  WG UDP $WG_PORT  HTTP TCP $HTTP_PORT"
+say "完成: $NAME  $HOST  HTTP TCP $HTTP_PORT"
 say "中枢池: 本次 ${r#reached } 台回应, 池内共 $n 台在册"
-say "云服务器记得在安全组放行 UDP $WG_PORT 和 TCP $HTTP_PORT"
+say "云服务器记得在安全组放行 TCP 22 和 TCP $HTTP_PORT"
 code=$(python3 -Ic 'import sys,json,base64;print("CHR:"+base64.b64encode(json.dumps({"host":sys.argv[1],"http_port":int(sys.argv[2])}).encode()).decode())' "$HOST" "$HTTP_PORT")
 say "登记码(池里没有别的活中枢时, 在 Mac 上跑 hub/add.sh 粘贴它):"
 echo "$code"

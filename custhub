@@ -1,15 +1,10 @@
 #!/bin/bash
 # custhub — 中枢上的唯一管理入口(root 跑)。Mac 经 ssh 受限账号调用, 参数全部按白名单校验。
-#   info                      输出 name/host/net/wg_port/http_port/srvpub/ssh_port/sshkey/version
+#   info                      输出 name/host/net/wg_port/http_port/srvpub/ssh_port/sshkey/version(net/wg_port/srvpub 是旧版字段, 只为池兼容保留)
 #   upgrade REF SHA           按指定版本(git commit + bootstrap.sh 的 sha256)从 GitHub/镜像拉代码后台重装, 效果同在服务器上粘一键命令
 #   self-uninstall yes        后台卸载本机中枢(通知池子下线后清干净)
 #   pool                      中枢池名单 TSV: name host wg_port http_port srvpub net joined seen left
-#   reserve                   预留一个客户号(最小空位), 输出号
-#   open N PUB                给客户号 N 开通公钥
-#   name N B64                记客户名(base64, 免引号/中文问题)
-#   drop N                    收回客户号
-#   sync                      按 peers/ 重新生成并应用 wg 配置
-#   list                      N  公钥  名字(b64)  最近握手
+#   drop N                    清旧版 WG 授权残留(WG 已停用, 兼容老清单)
 #   job-put TOKEN             stdin = tar(TOKEN.ps1 TOKEN.m.ps1 TOKEN.sh), 放到下发目录
 #   job-rm TOKEN              删下发脚本和回报
 #   report TOKEN FROM         回报日志第 FROM 行起
@@ -34,7 +29,7 @@
 #   rep-in TOKEN log|fail     custrep 的强制命令调用: stdin 每行 "步骤<TAB>说明[<TAB>用户 机器名]" 追加到回报; fail = stdin 是失败日志尾
 set -euo pipefail
 umask 022
-S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report; IF=cust0
+S=/var/lib/custhub; W=/srv/custhub; R=/var/lib/custhub-report
 . "$S/settings"   # NET WG_PORT HTTP_PORT HOST NAME
 
 die(){ echo "ERR $*" >&2; exit 1; }
@@ -90,20 +85,6 @@ rep_sync(){
   rm -f "$tmp"
 }
 
-# peers/N: pub=  name=(b64)  — 由它生成 wg 配置, 中枢重启不丢
-apply(){
-  {
-    printf '[Interface]\nAddress = %s.1/24\nListenPort = %s\nPrivateKey = %s\n' "$NET" "$WG_PORT" "$(cat "$S/server.key")"
-    for f in "$S"/peers/*; do
-      [ -f "$f" ] || continue
-      p=$(sed -n 's/^pub=//p' "$f"); [ -n "$p" ] || continue
-      printf '\n[Peer]\nPublicKey = %s\nAllowedIPs = %s.%s/32\n' "$p" "$NET" "${f##*/}"
-    done
-  } >"/etc/wireguard/$IF.conf.new"
-  chmod 600 "/etc/wireguard/$IF.conf.new"; mv "/etc/wireguard/$IF.conf.new" "/etc/wireguard/$IF.conf"
-  wg syncconf "$IF" <(wg-quick strip "$IF")
-}
-
 cmd=${1:-}; shift || true
 case $cmd in
   info)
@@ -112,32 +93,8 @@ case $cmd in
     printf 'version=%s\n' "${VERSION:-}" ;;
   pool)
     POOL_DIR=/var/lib/custhub-pool python3 -I /usr/local/lib/custhub/pool.py list ;;
-  reserve)
-    lock
-    n=2; while [ -e "$S/peers/$n" ]; do n=$((n+1)); done
-    [ "$n" -le 254 ] || die "full"
-    printf 'pub=\nname=%s\nat=%s\n' "$(printf '待接入' | base64 -w0)" "$(date +%s)" >"$S/peers/$n"
-    echo "$n" ;;
-  open)
-    num "$1"; pub "$2"; lock
-    [ -f "$S/peers/$1" ] || die "not reserved"
-    sed -i "s|^pub=.*|pub=$2|" "$S/peers/$1"; apply ;;
-  name)
-    num "$1"; [[ ${2:-} =~ ^[A-Za-z0-9+/=]{1,400}$ ]] || die "bad name"; lock
-    [ -f "$S/peers/$1" ] && sed -i "s|^name=.*|name=$2|" "$S/peers/$1" ;;
-  drop)
-    num "$1"; lock
-    rm -f "$S/peers/$1"; apply ;;
-  sync)
-    lock; apply ;;
-  list)
-    hs=$(wg show "$IF" latest-handshakes 2>/dev/null || true)
-    for f in "$S"/peers/*; do
-      [ -f "$f" ] || continue
-      p=$(sed -n 's/^pub=//p' "$f")
-      h=$(awk -v k="$p" 'k!="" && $1==k{print $2}' <<<"$hs")
-      printf '%s\t%s\t%s\t%s\t%s\n' "${f##*/}" "${p:--}" "$(sed -n 's/^name=//p' "$f")" "${h:-0}" "$(sed -n 's/^at=//p' "$f")"
-    done ;;
+  drop)   # 旧版 WG 授权的收回: WG 已停用, 只清残留记录(Mac 端老清单行会调到)
+    num "$1"; rm -f "$S/peers/$1" ;;
   job-put)
     tok "$1"; t=$(mktemp -d)
     tar -x -C "$t" -f - --no-same-owner
