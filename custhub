@@ -21,6 +21,11 @@
 #   node-set N PORT KEYB64 [PORT2]  开/改客户 N 的节点: 公网 TCP PORT → 127.0.0.1:23000+N(socks5/http);
 #                             可选 PORT2 → 127.0.0.1:24000+N(加密入口 shadowsocks); KEYB64 = 客户机节点通道公钥
 #   node-del N                关客户 N 的节点(撤公钥、关端口)
+#   node-relay N PORT KEYB64 PORT2 PKG SHA   (stdin 一行: 账号 密码 加密方法 加密密钥) 开/改客户 N 的节点(中转模式):
+#                             会合点上跑 sing-box(PKG = /pkg 下的 Linux 版, 按 SHA 校验后装到 /usr/local/lib/custhub/sing-box)
+#                             公网 PORT = socks5/http(TCP+UDP), PORT2 = shadowsocks(TCP+UDP); 唯一出口 = 127.0.0.1:23000+N
+#                             (客户机的 microsocks 经节点通道挂上来), UDP 用 UDP-over-TCP v2 带过去; 客户机不用装 sing-box。
+#                             配置由这里按参数生成, 不收外来配置文件
 #   node-list                 N  公网端口  通道是否在线(1/0)  公网端口是否在听(1/0)  端口2  通道2  在听2(没开端口2 则为 - - -)
 #   kick-node N               踢掉占着客户 N 节点通道的旧连接(客户机节点守护重连前自己调)
 # 进度回报的 SSH 备用通道(客户机开着代理、HTTP 回报被弄丢时用; 账号 custrep, 每次接入一把一次性钥匙, 只能写这一次的回报):
@@ -48,11 +53,33 @@ kick_port(){
   done; true
 }
 # 节点公网端口的 iptables 放行(宿主机有 INPUT DROP 时才有意义, 没装 iptables 跳过)
-node_ipt(){  # node_ipt add|del PORT
+node_ipt(){  # node_ipt add|del PORT [tcp|udp]
   command -v iptables >/dev/null 2>&1 || return 0
-  if [ "$1" = del ]; then iptables -D INPUT -p tcp --dport "$2" -j ACCEPT 2>/dev/null || true
-  else iptables -C INPUT -p tcp --dport "$2" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport "$2" -j ACCEPT; fi
+  local pr=${3:-tcp}
+  if [ "$1" = del ]; then iptables -D INPUT -p "$pr" --dport "$2" -j ACCEPT 2>/dev/null || true
+  else iptables -C INPUT -p "$pr" --dport "$2" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p "$pr" --dport "$2" -j ACCEPT; fi
 }
+# 节点公网端口校验(N 自己原来用的不算占用)
+node_ports_ok(){  # node_ports_ok N PORT PORT2 OLD OLD2
+  local n=$1 q f
+  [ "$2" != "$3" ] || die "two ports must differ"
+  for q in $2 $3; do
+    [[ $q =~ ^[0-9]{4,5}$ ]] && [ "$q" -ge 1025 ] && [ "$q" -le 65000 ] || die "bad port $q"
+    case $q in "$WG_PORT"|"$HTTP_PORT"|22) die "port $q reserved" ;; esac
+    [ "$q" -ge "$TUN_BASE" ] && [ "$q" -lt $((NODE2_BASE+1000)) ] && die "port $q in tunnel range"
+    for f in "$S"/node/*; do [ -f "$f" ] && [ "${f##*/}" != "$n" ] && grep -qxE "port2?=$q" "$f" && die "port $q used by node ${f##*/}"; done
+    if [ "$q" != "$4" ] && [ "$q" != "$5" ] && ss -Hltn "sport = :$q" | grep -q .; then die "port $q busy"; fi
+  done
+}
+# 关掉客户 N 的节点进程(两种模式的单元名都是 custhub-node-N[-2].{socket,service})
+node_units_off(){  # node_units_off N
+  local x
+  for x in "" "-2"; do
+    systemctl disable -q --now "custhub-node-$1$x.socket" "custhub-node-$1$x.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/custhub-node-$1$x.socket" "/etc/systemd/system/custhub-node-$1$x.service"
+  done
+}
+NODE_SB=/usr/local/lib/custhub/sing-box; NODE_CFG=/var/lib/custhub/node-cfg
 tun_sync(){
   local f n k tmp
   mkdir -p "$S/tun"; tmp=$(mktemp)
@@ -189,6 +216,9 @@ for line in sys.stdin:
       for f in "$S"/node/*; do [ -f "$f" ] && [ "${f##*/}" != "$n" ] && grep -qxE "port2?=$q" "$f" && die "port $q used by node ${f##*/}"; done
       if [ "$q" != "$old" ] && [ "$q" != "$old2" ] && ss -Hltn "sport = :$q" | grep -q .; then die "port $q busy"; fi
     done
+    if grep -qx 'mode=relay' "$S/node/$n" 2>/dev/null; then   # 从中转模式切回端口转发: 先停中转服务和 UDP 放行
+      node_units_off "$n"; rm -f "$NODE_CFG/$n.json"; for q in $old $old2; do node_ipt del "$q"; node_ipt del "$q" udp; done; old=; old2=
+    fi
     printf 'port=%s\nkey=%s\nport2=%s\n' "$p" "$k" "$p2" >"$S/node/$n"; tun_sync
     # 每个公网端口一对 systemd socket+proxyd: custhub-node-N(→23000+N), custhub-node-N-2(→24000+N)
     unit(){  # unit 后缀 公网端口 本机端口
@@ -205,6 +235,51 @@ for line in sys.stdin:
     node_ipt add "$p"; systemctl enable -q --now "custhub-node-$n.socket"
     if [ -n "$p2" ]; then node_ipt add "$p2"; systemctl enable -q --now "custhub-node-$n-2.socket"; fi
     echo "ok $p $p2" ;;
+  node-relay)
+    tn "$1"; n=$1; p=${2:-}; p2=${4:-}; pkg=${5:-}; sha=${6:-}
+    k=$(printf '%s' "${3:-}" | base64 -d 2>/dev/null | tr -d '\r\n')
+    [[ $k =~ ^ssh-ed25519\ [A-Za-z0-9+/]{68}$ ]] || die "bad ssh key"
+    case "$(uname -m)" in x86_64) ar=amd64 ;; aarch64) ar=arm64 ;; *) die "unsupported arch $(uname -m)" ;; esac
+    [[ $pkg =~ ^node/sing-box-[0-9.]+-linux-$ar-musl$ ]] || die "bad pkg $pkg (need linux-$ar)"
+    [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "bad sha"
+    read -r u pw m sk || die "no params on stdin"
+    [[ $u =~ ^[A-Za-z0-9_]{1,32}$ ]] && [[ $pw =~ ^[A-Za-z0-9]{8,64}$ ]] || die "bad user/pass"
+    case $m in aes-128-gcm|aes-256-gcm|chacha20-ietf-poly1305|2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm) ;; *) die "bad method" ;; esac
+    [[ $sk =~ ^[A-Za-z0-9+/=]{16,88}$ ]] || die "bad ss key"
+    lock; mkdir -p "$S/node"; mkdir -m 700 -p "$NODE_CFG"
+    old=$(sed -n 's/^port=//p' "$S/node/$n" 2>/dev/null || true); old2=$(sed -n 's/^port2=//p' "$S/node/$n" 2>/dev/null || true)
+    node_ports_ok "$n" "$p" "$p2" "$old" "$old2"
+    # sing-box: 已装且指纹对就不动; 否则从下发目录 /pkg 装(Mac 端 sync-pkg 先传上来)
+    if [ ! -x "$NODE_SB" ] || [ "$(sha256sum "$NODE_SB" | cut -c1-64)" != "$sha" ]; then
+      [ -f "$W/pkg/$pkg" ] || die "pkg $pkg not uploaded"
+      [ "$(sha256sum "$W/pkg/$pkg" | cut -c1-64)" = "$sha" ] || die "pkg sha mismatch"
+      install -m 755 "$W/pkg/$pkg" "$NODE_SB.new"; mv -f "$NODE_SB.new" "$NODE_SB"
+    fi
+    # 停掉原来的(端口转发模式的 socket 单元 / 不再用的旧端口放行), 再写新的
+    node_units_off "$n"
+    for q in $old $old2; do [ "$q" = "$p" ] || [ "$q" = "$p2" ] || { node_ipt del "$q"; node_ipt del "$q" udp; }; done
+    printf 'port=%s\nkey=%s\nport2=%s\nmode=relay\n' "$p" "$k" "$p2" >"$S/node/$n"; tun_sync
+    (umask 077; python3 -I - "$p" "$p2" "$((NODE_BASE+n))" "$u" "$pw" "$m" "$sk" >"$NODE_CFG/$n.json" <<'CFGPY'
+import sys, json
+p, p2, tp, u, pw, m, sk = sys.argv[1:]
+print(json.dumps({
+  "log": {"level": "warn"},
+  "inbounds": [
+    {"type": "mixed", "tag": "in", "listen": "0.0.0.0", "listen_port": int(p), "users": [{"username": u, "password": pw}]},
+    {"type": "shadowsocks", "tag": "ss", "listen": "0.0.0.0", "listen_port": int(p2), "method": m, "password": sk}],
+  "outbounds": [{"type": "socks", "tag": "node", "server": "127.0.0.1", "server_port": int(tp),
+                 "username": u, "password": pw, "udp_over_tcp": {"enabled": True, "version": 2}}],
+  "route": {"final": "node"}}, indent=1))
+CFGPY
+    )
+    "$NODE_SB" check -c "$NODE_CFG/$n.json" >/dev/null 2>&1 || die "sing-box check failed"
+    printf '[Unit]\nDescription=custhub node c-%s relay (sing-box)\nAfter=network-online.target\n[Service]\nExecStart=%s run -c ${CREDENTIALS_DIRECTORY}/cfg\nLoadCredential=cfg:%s/%s.json\nDynamicUser=yes\nPrivateTmp=yes\nNoNewPrivileges=yes\nRestart=always\nRestartSec=5\n[Install]\nWantedBy=multi-user.target\n' \
+      "$n" "$NODE_SB" "$NODE_CFG" "$n" >"/etc/systemd/system/custhub-node-$n.service"
+    systemctl daemon-reload; systemctl enable -q "custhub-node-$n.service"; systemctl restart "custhub-node-$n.service"
+    for q in $p $p2; do node_ipt add "$q"; node_ipt add "$q" udp; done
+    sleep 1
+    systemctl is-active -q "custhub-node-$n.service" || die "relay service failed: $(journalctl -u "custhub-node-$n" -n 3 --no-pager -o cat 2>/dev/null | tr '\n' ' ')"
+    echo "ok $p $p2 relay" ;;
   node-del)
     tn "$1"; n=$1; lock
     for x in "" "-2"; do
@@ -212,8 +287,8 @@ for line in sys.stdin:
       rm -f "/etc/systemd/system/custhub-node-$n$x.socket" "/etc/systemd/system/custhub-node-$n$x.service"
     done
     systemctl daemon-reload
-    for q in $(sed -n 's/^port2\{0,1\}=//p' "$S/node/$n" 2>/dev/null); do node_ipt del "$q"; done
-    rm -f "$S/node/$n"; tun_sync; kick_port $((NODE_BASE+n)) >/dev/null; kick_port $((NODE2_BASE+n)) >/dev/null
+    for q in $(sed -n 's/^port2\{0,1\}=//p' "$S/node/$n" 2>/dev/null); do node_ipt del "$q"; node_ipt del "$q" udp; done
+    rm -f "$S/node/$n" "$NODE_CFG/$n.json"; tun_sync; kick_port $((NODE_BASE+n)) >/dev/null; kick_port $((NODE2_BASE+n)) >/dev/null
     echo ok ;;
   node-list)
     ls=$(ss -Hltn 2>/dev/null | awk '{print $4}')
@@ -221,7 +296,8 @@ for line in sys.stdin:
     pub(){ grep -qE ":$1\$" <<<"$ls" && echo 1 || echo 0; }
     for f in "$S"/node/*; do
       [ -f "$f" ] || continue; n=${f##*/}; p=$(sed -n 's/^port=//p' "$f"); p2=$(sed -n 's/^port2=//p' "$f")
-      if [ -n "$p2" ]; then x=$(printf '%s\t%s\t%s' "$p2" "$(up $((NODE2_BASE+n)))" "$(pub "$p2")"); else x=$(printf -- '-\t-\t-'); fi
+      b2=$((NODE2_BASE+n)); grep -qx 'mode=relay' "$f" && b2=$((NODE_BASE+n))   # 中转模式两个入口共用一条节点通道
+      if [ -n "$p2" ]; then x=$(printf '%s\t%s\t%s' "$p2" "$(up "$b2")" "$(pub "$p2")"); else x=$(printf -- '-\t-\t-'); fi
       printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$p" "$(up $((NODE_BASE+n)))" "$(pub "$p")" "$x"
     done ;;
   upgrade)

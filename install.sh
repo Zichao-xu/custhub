@@ -165,9 +165,14 @@ for r in "-p tcp --dport $HTTP_PORT"; do
     else iptables -C INPUT \$r -j ACCEPT 2>/dev/null || iptables -I INPUT 1 \$r -j ACCEPT; fi
 done
 # 网络节点的公网端口(custhub node-set 开的), 开机/重装后补回
-for p in \$(cat $S/node/* 2>/dev/null | sed -n 's/^port2\{0,1\}=//p'); do
-    if [ "\$1" = stop ]; then iptables -D INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null
-    else iptables -C INPUT -p tcp --dport \$p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport \$p -j ACCEPT; fi
+# 中转模式(node-relay)的端口 TCP 和 UDP 都要
+for f in $S/node/*; do
+    [ -f "\$f" ] || continue
+    pr=tcp; grep -qx 'mode=relay' "\$f" && pr="tcp udp"
+    for p in \$(sed -n 's/^port2\{0,1\}=//p' "\$f"); do for x in \$pr; do
+        if [ "\$1" = stop ]; then iptables -D INPUT -p \$x --dport \$p -j ACCEPT 2>/dev/null
+        else iptables -C INPUT -p \$x --dport \$p -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p \$x --dport \$p -j ACCEPT; fi
+    done; done
 done
 exit 0
 EOF
