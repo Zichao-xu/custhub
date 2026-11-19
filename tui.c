@@ -457,7 +457,8 @@ static void act_new_client(void)
     static char line[600], line7[600], text[3200];
     snprintf(line, sizeof line, "powershell -c \"start powershell -verb runas -args 'irm https://ghfast.top/%s/custhub3-join.ps1|iex;pause'\"; curl -fsSL %s/custhub3-join.sh|sh", u, u);
     /* Win7 / 8: PowerShell 2.0 没有 irm, TLS 1.2 要自己开(要 .NET 4.5) */
-    snprintf(line7, sizeof line7, "powershell -c \"start powershell -verb runas -args '[Net.ServicePointManager]::SecurityProtocol=3072;iex(New-Object Net.WebClient).DownloadString(''https://ghfast.top/%s/custhub3-join.ps1'');pause'\"", u);
+    /* PowerShell 2.0 没有 pause: 用 -NoExit 让管理员窗口停住, 出错也看得见 */
+    snprintf(line7, sizeof line7, "powershell -c \"start powershell -verb runas -args '-NoExit -c [Net.ServicePointManager]::SecurityProtocol=3072;iex(New-Object Net.WebClient).DownloadString(''https://ghfast.top/%s/custhub3-join.ps1'')'\"", u);
     osc52(line);
     snprintf(text, sizeof text,
              "接入命令(已试着放进剪贴板; 终端不支持的话, 从下面复制):\n\n%s\n\n"
