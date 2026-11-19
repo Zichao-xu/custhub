@@ -450,6 +450,7 @@ int mesh_run(const char *dir)
         for (int i = 0; i < 16; i++) snprintf(G.ctl_token + 2 * i, 3, "%02x", r[i]);
         char tp[300]; snprintf(tp, sizeof tp, "%s/ctl.token", G.dir);
         if (m_write(tp, G.ctl_token, 32)) { logf_("写不了控制口令牌 %s", tp); return 1; }
+        p_group_share(tp, 0);                            /* custhub 组的账号能读(没有组 / 不是 root 时什么都不做) */
     }
     targets_sync();
     rel_start();

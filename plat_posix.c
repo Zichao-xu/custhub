@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <pwd.h>
+#include <grp.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
@@ -762,6 +763,99 @@ int p_path_link(const char *exe, int on, char *how, size_t cap)
         snprintf(how, cap, "%s(新开的终端生效)", ln);
     } else snprintf(how, cap, "%s", ln);
     return 0;
+}
+
+/* ---------- 本机谁能用: custhub 用户组 ---------- */
+#define GRP "custhub"
+static int has_cmd(const char *c)
+{
+    static const char *dirs[] = { "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/usr/local/sbin", "/usr/local/bin" };
+    char p[200];
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) { snprintf(p, sizeof p, "%s/%s", dirs[i], c); if (access(p, X_OK) == 0) return 1; }
+    return 0;
+}
+
+int p_group_setup(char *why, size_t wcap)
+{
+    why[0] = 0;
+    if (dry() || getgrnam(GRP)) return 0;
+    int r;
+    if (is_dir("/Library")) { const char *a[] = { "dseditgroup", "-o", "create", "-r", "custhub users", GRP, NULL }; r = run_q(a); }
+    else if (has_cmd("groupadd")) { const char *a[] = { "groupadd", "-r", GRP, NULL }; r = run_q(a); }
+    else { const char *a[] = { "addgroup", "-S", GRP, NULL }; r = run_q(a); }
+    if (r || !getgrnam(GRP)) { snprintf(why, wcap, "建不了用户组 %s: %s", GRP, run_out); return -1; }
+    return 0;
+}
+
+void p_group_share(const char *path, int dir)
+{
+    if (dry()) return;
+    struct group *g = getgrnam(GRP);
+    if (!g || geteuid() != 0) return;
+    if (chown(path, (uid_t)-1, g->gr_gid) == 0) chmod(path, dir ? 0710 : 0640);
+}
+
+int p_group_user(const char *user, int add, char *why, size_t wcap)
+{
+    why[0] = 0;
+    if (!getpwnam(user)) { snprintf(why, wcap, "没有账号 %s", user); return -1; }
+    if (dry()) return 0;
+    if (p_group_setup(why, wcap)) return -1;
+    int r;
+    if (is_dir("/Library")) { const char *a[] = { "dseditgroup", "-o", "edit", add ? "-a" : "-d", user, "-t", "user", GRP, NULL }; r = run_q(a); }
+    else if (add && has_cmd("usermod")) { const char *a[] = { "usermod", "-aG", GRP, user, NULL }; r = run_q(a); }
+    else if (!add && has_cmd("gpasswd")) { const char *a[] = { "gpasswd", "-d", user, GRP, NULL }; r = run_q(a); }
+    else { const char *a[] = { add ? "addgroup" : "delgroup", user, GRP, NULL }; r = run_q(a); }
+    if (r) { snprintf(why, wcap, "%s", run_out); return -1; }
+    return 0;
+}
+
+int p_group_list(char *out, size_t cap)
+{
+    out[0] = 0;
+    struct group *g = getgrnam(GRP);
+    if (!g) return -1;
+    size_t n = 0;
+    for (char **m = g->gr_mem; m && *m && n < cap - 1; m++) n += (size_t)snprintf(out + n, cap - n, "%s%s", n ? " " : "", *m);
+    return 0;
+}
+
+int p_group_member(void)
+{
+    if (geteuid() == 0) return 1;
+    struct group *g = getgrnam(GRP);
+    if (!g) return 0;
+    gid_t l[256]; int n = getgroups(256, l);
+    for (int i = 0; i < n; i++) if (l[i] == g->gr_gid) return 1;
+    return getegid() == g->gr_gid;
+}
+
+void p_public_dir(const char *path) { if (!dry()) chmod(path, 0755); }
+
+void p_username(char *out, size_t cap)
+{
+    struct passwd *pw = getpwuid(geteuid());
+    snprintf(out, cap, "%s", pw ? pw->pw_name : "?");
+}
+
+const char *p_invoker(void)
+{
+    const char *u = getenv("SUDO_USER");
+    return u && *u && strcmp(u, "root") ? u : NULL;
+}
+
+int p_elevate(int argc, char **argv)
+{
+    if (geteuid() == 0 || !has_cmd("sudo")) return -1;
+    char self[1200];
+    if (p_self_path(self, sizeof self)) return -1;
+    static char *av[80]; int k = 0;
+    av[k++] = "sudo"; av[k++] = "--preserve-env=SSH_AUTH_SOCK,CUSTHUB_PASSPHRASE"; av[k++] = self;
+    for (int i = 1; i < argc && k < 79; i++) av[k++] = argv[i];
+    av[k] = NULL;
+    fflush(stdout); fflush(stderr);
+    execvp("sudo", av);
+    return -1;
 }
 
 int p_rmtree(const char *path)

@@ -93,6 +93,19 @@ void p_sleep_ms(int ms);
 int  p_service_install(const char *exe, const char *dir, char *why, size_t wcap);
 int  p_service_remove(const char *dir, char *why, size_t wcap);
 const char *p_service_kind(void);
+/* 本机谁能用(design-v3 §0 第 19 条): custhub 用户组里的账号不用 root 就能 sh / connect / ls / pass(经本机守护, 碰不到节点钥匙)
+ *   POSIX: 组 custhub; 节点目录 0710 root:custhub, conf 和 ctl.token 0640 root:custhub, 其他(钥匙、通行证、日志)只给 root
+ *   Windows: 本地组 custhub; conf 和 ctl.token 加一条组可读, 其他只给 SYSTEM / Administrators
+ * 演练模式都不碰系统 */
+int  p_group_setup(char *why, size_t wcap);                 /* 组没有就建; 0 成功(建不了也不致命) */
+void p_group_share(const char *path, int dir);              /* 组可读(文件) / 组可进(目录); 没有组就什么都不做 */
+int  p_group_user(const char *user, int add, char *why, size_t wcap);   /* 把账号加进 / 移出组; 0 成功 */
+int  p_group_list(char *out, size_t cap);                   /* 组里的账号, 空格分隔; 0 成功 */
+int  p_group_member(void);                                  /* 当前账号在不在组里(当前会话已生效的) */
+void p_public_dir(const char *path);                        /* 安装目录: 谁都能进、能跑程序(POSIX 0755; Windows 加 Users 读和执行) */
+void p_username(char *out, size_t cap);                     /* 当前账号名 */
+const char *p_invoker(void);                                /* 用 sudo 跑时 sudo 之前的账号(Windows: 当前账号); 没有返回 NULL */
+int  p_elevate(int argc, char **argv);                      /* 换成 root 重跑同一条命令(POSIX: sudo, 会问密码); 回来 = 做不到 */
 /* 命令加进 PATH(on=1) / 撤掉(on=0): POSIX 在 /usr/local/bin(OpenWrt /usr/bin; 用户模式 ~/.local/bin + shell 配置)放链接,
  * Windows 把 exe 所在目录加进 PATH。how 写做了什么或为什么没做; 0 成功。演练模式不碰系统 */
 int  p_path_link(const char *exe, int on, char *how, size_t cap);

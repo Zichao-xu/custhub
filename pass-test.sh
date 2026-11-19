@@ -6,7 +6,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
 M=$PWD/mesh
-T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+T=$(mktemp -d); DP=; trap 'kill $DP 2>/dev/null; rm -rf "$T"' EXIT
 pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
@@ -76,7 +76,7 @@ head -c 100 "$T/p1" >"$T/p11"
 chk 不完整          "截断"                              "$T/p11" "$ENG" "$A" sh
 
 echo "== 签发(mesh pass)"
-eval "$(ssh-agent -s)" >/dev/null; trap 'kill $SSH_AGENT_PID 2>/dev/null; rm -rf "$T"' EXIT
+eval "$(ssh-agent -s)" >/dev/null; trap 'kill $SSH_AGENT_PID $DP 2>/dev/null; rm -rf "$T"' EXIT
 D=$T/eng
 { echo "custhub-mesh-trust 1"; echo "node a $A"; echo "node b $B"; echo "node eng $ENG"; echo "--end--"; } >"$T/tdata"
 ssh-keygen -q -Y sign -f "$T/master" -n custhub-mesh-trust "$T/tdata" 2>/dev/null; cat "$T/tdata" "$T/tdata.sig" >"$D/trust"
@@ -102,13 +102,18 @@ o=$($M key --dir "$D" pass --to nobody --svc sh 2>&1);       echo "$o" | grep -q
 o=$($M key --dir "$D" pass --to a --svc "ssh" 2>&1);         echo "$o" | grep -q "svc 不对" && ok "--svc 写错被拒" || ng "--svc 写错没拒: $o"
 
 echo "== 本机存几张、custhub pass 装上 / 列出"
+CB=$((20000 + RANDOM % 20000))   # custhub pass 经本机守护: 给 eng、a 起守护(不开监听、没有中继, 只为控制口)
+printf 'master %s\nctl 127.0.0.1:%s\nrelay off\nupnp off\nlog %s/eng.log\n' "$(cat "$T/master.pub")" $CB "$T" >"$D/conf"
+$M run "$D" >/dev/null 2>&1 & DP="$DP $!"
 $M key --dir "$D" pass --to b --svc "port:22" 2>/dev/null
 [ -s "$D/pass" ] && [ -s "$D/pass.1" ] && ok "再签一张不同范围的: 并存(pass、pass.1), 不顶掉前一张" || ng "存放: $(ls "$D")"
 $M key --dir "$D" pass --to b --svc "port:22" --hours 3 2>/dev/null
 [ ! -e "$D/pass.2" ] && ok "同范围再签: 替换原来那张, 不多占位置" || ng "多占了: $(ls "$D")"
 o=$($M pass --dir "$D"); echo "$o" | grep -q "进 a,b, 用 sh port:22, 还剩 [12] 小时" && echo "$o" | grep -q "进 b, 用 port:22, 还剩 [23] 小时" && ok "custhub pass 列出两张、剩多久" || ng "列出: $(echo "$o" | tr "\n" "|")"
 (cd "$T" && $M key --dir "$D" pass --for a --to b 2>"$T/err") && [ -s "$T/a.pass" ] && grep -q "custhub pass a.pass" "$T/err" && ok "--for 名字: 存成 a.pass(默认 sh), 提示对方怎么装" || ng "--for a: $(cat "$T/err"); $(ls "$T")"
-cp "$D/trust" "$T/a/trust"; cp "$D/conf" "$T/a/conf"
+cp "$D/trust" "$T/a/trust"; printf 'master %s\nctl 127.0.0.1:%s\nrelay off\nupnp off\nlog %s/a.log\n' "$(cat "$T/master.pub")" $((CB+1)) "$T" >"$T/a/conf"
+$M run "$T/a" >/dev/null 2>&1 & DP="$DP $!"
+for _ in $(seq 20); do [ -s "$T/a/ctl.token" ] && [ -s "$D/ctl.token" ] && break; sleep 0.25; done
 o=$($M pass --dir "$T/a" "$T/a.pass"); echo "$o" | grep -q "已装上: 进 b, 用 sh" && echo "$o" | grep -q "现在可以: custhub sh b" && [ -s "$T/a/pass" ] && ok "custhub pass a.pass: 装上, 告诉下一步" || ng "装: $o"
 o=$($M pass --dir "$T/a" "$D/pass" 2>&1); echo "$o" | grep -q "不是发给本机的" && ok "别人的通行证装不上" || ng "装别人的: $o"
 

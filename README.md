@@ -23,7 +23,7 @@ curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/custhub3-j
 irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1 | iex
 ```
 
-它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向中继报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。节点目录只给 root / 管理员，所以在服务器上用 `sudo custhub …`，Windows 上用管理员终端。
+它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向中继报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。跑接入的那个账号（用 sudo 时是 sudo 之前的账号）会加进本机的 `custhub` 用户组，重新登录后不用 sudo 就能 `custhub sh / connect / ls / pass`；别的账号用 `sudo custhub user add <账号>` 加（`user del` 移出，`user ls` 列出）。组里的账号经本机守护办事，碰不到节点钥匙；但能用本机的通行证开别的机器的 shell，只加可信的人。`join`、`remove`、`user`、`key` 要 root，不是 root 时自动换成 `sudo`（Windows 上提示用管理员终端）。
 
 ### 工程师登录
 
@@ -77,7 +77,7 @@ custhub key lock
 - 链路：TCP + Noise IK（X25519 / ChaCha20-Poly1305 / BLAKE2b），只收名单里的公钥。经中继的流里再套一层端到端 Noise：中继只看得到谁连谁。
 - 名单、发布清单、通行证、种子都用主钥匙以 `ssh-keygen -Y sign` 的格式签名（ssh-keygen 也能验）。
 - 通行证绑定发起方节点公钥，写明能进哪些机器、能用哪些服务、有效期（默认 2 小时、最长 1 天），对方自己验，不问任何中心。名单外的机器持证也能挂上中继当访客，只能连通行证里写的机器。
-- 本机：节点目录只给 root / 管理员（POSIX 0700 / 0600；Windows 只留 SYSTEM 和 Administrators），本机控制口要出示每次启动随机生成的令牌。
+- 本机：节点钥匙、通行证、日志只给 root / 管理员；`custhub` 组只能读 conf 和控制口令牌（POSIX：节点目录 0710、这两个文件 0640 root:custhub；Windows：本地组 custhub 只对这两个文件可读）。本机控制口要出示每次启动随机生成的令牌。
 - 主钥匙：12 个词 → scrypt(N=2^17, r=8, p=1) → ed25519；私钥不落盘，只在 ssh-agent 里。
 
 ## 平台

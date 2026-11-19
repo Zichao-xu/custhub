@@ -78,9 +78,20 @@ int cmd_mesh(int argc, char **argv)
     if (argc == 3 && !strcmp(c, "code")) {               /* 本机接入码 */
         snprintf(p, sizeof p, "%s/node.key", argv[2]);
         char code[8];
-        if (ident_load(p, &G.id)) { fprintf(stderr, "读不了 %s\n", p); return 1; }
+        if (ident_load(p, &G.id)) return cmd_ctl(argv[2], "CODE");   /* 钥匙只有 root 能读: 问守护 */
         join_code(G.id.ed, code); printf("%s\n", code); return 0;
     }
+    /* 要 root / 管理员的命令: 不是就自己换成 sudo 重跑(会问密码); 用户模式装的(管理电脑)不用 */
+    int user_inst = strstr(node_default(), p_user_dir()) == node_default();
+    int want_root = !strcmp(c, "join") || !strcmp(c, "remove") || !strcmp(c, "user") || (!strcmp(c, "key") && !user_inst);
+    for (int i = 2; i < argc; i++) if (!strcmp(argv[i], "--user") || !strcmp(argv[i], "--dir")) want_root = 0;   /* --dir: 指定了自己的节点目录(测试 / 第一次建网) */
+    if (!strcmp(c, "remove") && user_inst) want_root = 0;
+    if (want_root && !p_is_admin() && !getenv("CUSTHUB_HOME") && !(argc >= 3 && !strcmp(c, "user") && !strcmp(argv[2], "ls"))) {
+        p_elevate(argc, argv);
+        fprintf(stderr, "custhub %s 要 root / 管理员权限: %s\n", c, strncmp(CH_PLAT, "win", 3) ? "用 sudo custhub …" : "用\"以管理员身份运行\"的终端");
+        return 1;
+    }
+    if (!strcmp(c, "user")) return cmd_user(argc - 2, argv + 2);
     if (!strcmp(c, "join")) return cmd_join3(argc - 2, argv + 2);
     if (!strcmp(c, "key")) return cmd_key(argc - 2, argv + 2);
     if (!strcmp(c, "remove")) return cmd_remove3(argc - 2, argv + 2);
@@ -99,6 +110,9 @@ int cmd_mesh(int argc, char **argv)
             "  custhub connect <机器> <端口>     接到对方本机端口(可给 ssh 当 ProxyCommand)\n"
             "  custhub pass <文件>               装上别人发给你的通行证\n"
             "  custhub pass                      看本机有哪些通行证、到哪天过期\n\n"
+            "本机账号(要 root, 不是 root 会自动 sudo)\n"
+            "  custhub user add <账号>           让这个账号不用 root 也能用 custhub(加进 custhub 组)\n"
+            "  custhub user del <账号> | ls      移出 / 列出\n\n"
             "管理员(要主钥匙)\n"
             "  custhub key unlock | lock | status         解锁 / 上锁主钥匙\n"
             "  custhub key pending                        待批准的机器(带接入码)\n"
@@ -119,7 +133,7 @@ int cmd_mesh(int argc, char **argv)
     return strcmp(c, "help") ? 2 : 0;
 }
 
-/* custhub pass [--dir 目录] [文件]: 带文件 = 装上别人发来的通行证; 不带 = 列出本机的 */
+/* custhub pass [--dir 目录] [文件]: 带文件 = 装上别人发来的通行证; 不带 = 列出本机的。都经本机守护(custhub 组的账号也能用) */
 int cmd_pass_local(int argc, char **argv)
 {
     const char *dir = NULL, *file = NULL;
@@ -130,40 +144,15 @@ int cmd_pass_local(int argc, char **argv)
                                "  (给别人签通行证是 custhub key pass)\n"); return 2; }
     }
     if (!dir) dir = node_default();
-    G.quiet = 1;
-    if (mesh_conf_load(dir)) { fprintf(stderr, "本机还没接入(读不了 %s); 先 custhub join\n", dir); return 1; }
-    static char t[PASSMAX + 1]; static pass_t P; char why[160], p[1300];
-    int64_t now = wall_ms() / 1000; int shown = 0;
+    static char t[PASSMAX + 1], line[PASSMAX * 2 + 32];
     if (file) {
         long n = m_read(file, t, sizeof t);
         if (n <= 0) { fprintf(stderr, "读不了 %s\n", file); return 1; }
-        if (pass_store(t, (size_t)n, p, sizeof p)) { fprintf(stderr, "装不上: %s\n", p); return 1; }
-    } else printf("本机 %s 的通行证:\n", name_of(G.id.ed));
-    for (int k = file ? -1 : 0; k < (file ? 0 : PASSSLOTS); k++) {
-        long n;
-        if (k < 0) n = (long)strlen(t);                   /* 刚装上的那张 */
-        else {
-            if (k) snprintf(p, sizeof p, "%s/pass.%d", dir, k); else snprintf(p, sizeof p, "%s/pass", dir);
-            n = m_read(p, t, sizeof t);
-        }
-        if (n <= 0 || pass_parse(t, (size_t)n, G.master, &P, why, sizeof why)) continue;
-        char tos[400] = ""; size_t tl = 0;
-        if (P.to_all) snprintf(tos, sizeof tos, "所有机器");
-        else for (int i = 0; i < P.nto && tl < sizeof tos - 40; i++) tl += (size_t)snprintf(tos + tl, sizeof tos - tl, "%s%s", i ? "," : "", name_of(P.to[i]));
-        int64_t left = P.until - now;
-        char st[60];
-        if (P.from > now + PASSSKEW) snprintf(st, sizeof st, "还没生效");
-        else if (left <= 0) snprintf(st, sizeof st, "已过期");
-        else snprintf(st, sizeof st, "还剩 %d 小时 %d 分", (int)(left / 3600), (int)(left % 3600 / 60));
-        printf("%s进 %s, 用 %s, %s\n", file ? "已装上: " : "  ", tos, P.svc, st);
-        if (file) { printf("现在可以: custhub sh %s\n", P.to_all ? "<机器>" : name_of(P.to[0])); return 0; }
-        shown++;
-    }
-    if (!shown) printf("  (没有) 请管理员签一张: custhub key pass --for %s --to <机器>\n", name_of(G.id.ed));
-    return 0;
+        int k = snprintf(line, sizeof line, "PASSPUT ");
+        b64_encode((const uint8_t *)t, (size_t)n, line + k);
+    } else snprintf(line, sizeof line, "PASSLS");
+    return cmd_ctl(dir, line);
 }
-
-
 int cmd_passcheck(char **a)
 {
     static char t[PASSMAX + 2], mk[512];

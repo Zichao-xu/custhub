@@ -140,7 +140,8 @@ int cmd_join3(int argc, char **argv)
     sep_join(node, sizeof node, dir, "node"); sep_join(exe, sizeof exe, dir, exe_name());
     if (strlen(node) >= sizeof G.dir - 40) { fprintf(stderr, "安装目录太长(最多 %d 个字节): %s\n", (int)sizeof G.dir - 40, node); return 1; }
     if (p_mkdir(dir) || p_mkdir(node)) { fprintf(stderr, "建不了 %s\n", node); return 1; }
-    if (p_private_dir(dir) || p_private_dir(node)) { fprintf(stderr, "收紧不了 %s 的权限\n", dir); return 1; }   /* 钥匙、令牌只给 root / 管理员 */
+    if (!p_user_mode()) p_public_dir(dir); else p_private_dir(dir);   /* 系统安装: 程序谁都能跑; 节点目录(钥匙、令牌)只给 root / 管理员 */
+    if (p_private_dir(node)) { fprintf(stderr, "收紧不了 %s 的权限\n", node); return 1; }
     printf("custhub %s(%s)接入\n  安装目录: %s\n", CH_VERSION, CH_PLAT, dir);
 
     static char seed[MAXTEXT + 4096]; char master_line[200], srepo[100]; const char *trust;
@@ -184,6 +185,15 @@ int cmd_join3(int argc, char **argv)
                 n += snprintf(nc + n, sizeof nc - (size_t)n, "%s\n", l);
     }
     if (m_write(p, nc, (size_t)n)) { fprintf(stderr, "写不了 %s\n", p); return 1; }
+    if (!p_user_mode() && !getenv("CUSTHUB_HOME")) {    /* 本机谁能用: custhub 组的账号不用 root(经本机守护) */
+        char gw[200];
+        if (p_group_setup(gw, sizeof gw)) printf("  %s(只有 root / 管理员能用 custhub)\n", gw);
+        else {
+            p_group_share(node, 1); p_group_share(p, 0);
+            const char *who = p_invoker();
+            if (who && !p_group_user(who, 1, gw, sizeof gw)) printf("  账号 %s 加进了 custhub 组: 重新登录后不用 sudo 就能用 custhub\n", who);
+        }
+    }
 
     char why[160];
     printf("  注册系统服务(%s)\n", p_service_kind()); fflush(stdout);
@@ -228,6 +238,30 @@ void path_ensure(void)
     if (strcmp(self, e1) && strcmp(self, e2)) return;
     if (!strcmp(self, e2)) p_set_user_mode(1);
     if (p_path_link(self, 1, how, sizeof how)) logf_("没能加进 PATH: %s", how);
+    if (p_user_mode()) return;
+    char node[1200], conf[1300];                        /* 老版本装的机器: 补上"custhub 组能用"的权限 */
+    sep_join(node, sizeof node, p_install_dir(), "node"); sep_join(conf, sizeof conf, node, "conf");
+    p_public_dir(p_install_dir()); p_private_dir(node);
+    if (!p_group_setup(how, sizeof how)) { p_group_share(node, 1); p_group_share(conf, 0); }
+    else logf_("%s", how);
+}
+
+/* custhub user add|del <账号> | ls: 本机哪些账号能用 custhub(要 root / 管理员) */
+int cmd_user(int argc, char **argv)
+{
+    char why[300], l[2000];
+    if (argc == 1 && !strcmp(argv[0], "ls")) {
+        if (p_group_list(l, sizeof l)) { printf("还没有 custhub 组(只有 root / 管理员能用)\n"); return 0; }
+        printf("custhub 组(不用 root 就能 sh / connect / ls / pass): %s\n", l[0] ? l : "(没有人)");
+        return 0;
+    }
+    if (argc != 2 || (strcmp(argv[0], "add") && strcmp(argv[0], "del"))) {
+        fprintf(stderr, "用法: custhub user add <账号> | del <账号> | ls\n  组里的账号不用 root 就能用本机的通行证开别的机器的 shell: 只加可信的人\n"); return 2;
+    }
+    int add = !strcmp(argv[0], "add");
+    if (p_group_user(argv[1], add, why, sizeof why)) { fprintf(stderr, "%s失败: %s\n", add ? "加入" : "移出", why); return 1; }
+    printf(add ? "%s 加进了 custhub 组(重新登录后生效)\n" : "%s 移出了 custhub 组\n", argv[1]);
+    return 0;
 }
 
 int cmd_run(int argc, char **argv)

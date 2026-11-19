@@ -907,6 +907,105 @@ out:
     return r;
 }
 
+/* ---------- 本机谁能用: 本地组 custhub ---------- */
+static int grp_sid(char *out, size_t cap)              /* 组的 SID 字符串; 没有组 -1 */
+{
+    BYTE sid[SECURITY_MAX_SID_SIZE]; DWORD sl = sizeof sid; WCHAR dom[256]; DWORD dl = 256; SID_NAME_USE use;
+    if (!LookupAccountNameW(NULL, L"custhub", sid, &sl, dom, &dl, &use)) return -1;
+    char *ss = NULL;
+    if (!ConvertSidToStringSidA(sid, &ss)) return -1;
+    snprintf(out, cap, "%s", ss); LocalFree(ss);
+    return 0;
+}
+
+static int set_sddl(const char *path, const char *sddl)
+{
+    PSECURITY_DESCRIPTOR sd = NULL; PACL dacl = NULL; BOOL present = FALSE, def = FALSE;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(sddl, SDDL_REVISION_1, &sd, NULL)) return -1;
+    int r = -1;
+    if (GetSecurityDescriptorDacl(sd, &present, &dacl, &def) && present &&
+        SetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, NULL, NULL, dacl, NULL) == ERROR_SUCCESS) r = 0;
+    LocalFree(sd);
+    return r;
+}
+
+int p_group_setup(char *why, size_t wcap)
+{
+    char sid[200]; why[0] = 0;
+    if (wdry() || !grp_sid(sid, sizeof sid)) return 0;
+    const char *a[] = { "net", "localgroup", "custhub", "/add", NULL };
+    char o[512]; p_run(a, o, sizeof o, 60);
+    if (grp_sid(sid, sizeof sid)) { snprintf(why, wcap, "建不了本地组 custhub"); return -1; }
+    return 0;
+}
+
+void p_group_share(const char *path, int dir)
+{
+    char sid[200], sddl[400];
+    if (wdry() || dir || grp_sid(sid, sizeof sid)) return;   /* Windows 不用给目录"可进"(默认人人有跳过遍历检查的权限) */
+    snprintf(sddl, sizeof sddl, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;%s)", sid);
+    set_sddl(path, sddl);
+}
+
+int p_group_user(const char *user, int add, char *why, size_t wcap)
+{
+    why[0] = 0;
+    if (wdry()) return 0;
+    if (p_group_setup(why, wcap)) return -1;
+    const char *a[] = { "net", "localgroup", "custhub", user, add ? "/add" : "/delete", NULL };
+    char o[512];
+    int r = p_run(a, o, sizeof o, 60);
+    if (r) { for (char *c = o; *c; c++) if (*c == '\r' || *c == '\n') *c = ' '; snprintf(why, wcap, "net localgroup 失败(%d): %.200s", r, o); return -1; }
+    return 0;
+}
+
+int p_group_list(char *out, size_t cap)
+{
+    out[0] = 0;
+    char sid[200]; if (grp_sid(sid, sizeof sid)) return -1;
+    const char *a[] = { "net", "localgroup", "custhub", NULL };
+    static char o[8192];
+    if (p_run(a, o, sizeof o, 60)) return -1;
+    char *d = strstr(o, "-----"); if (!d) return 0;     /* 横线之后、最后一行("命令成功完成")之前是成员 */
+    d = strchr(d, '\n'); if (!d) return 0;
+    char *lines[64]; int nl = 0;
+    for (char *l = strtok(d + 1, "\r\n"); l && nl < 64; l = strtok(NULL, "\r\n")) if (*l) lines[nl++] = l;
+    size_t n = 0;
+    for (int i = 0; i + 1 < nl && n < cap - 1; i++) n += (size_t)snprintf(out + n, cap - n, "%s%s", n ? " " : "", lines[i]);
+    return 0;
+}
+
+int p_group_member(void)
+{
+    if (p_is_admin()) return 1;
+    BYTE sid[SECURITY_MAX_SID_SIZE]; DWORD sl = sizeof sid; WCHAR dom[256]; DWORD dl = 256; SID_NAME_USE use; BOOL m = FALSE;
+    if (!LookupAccountNameW(NULL, L"custhub", sid, &sl, dom, &dl, &use)) return 0;
+    if (!CheckTokenMembership(NULL, sid, &m)) m = FALSE;
+    return m;
+}
+
+void p_public_dir(const char *path)
+{
+    if (wdry()) return;                                 /* SYSTEM / Administrators 完全控制, Users 只能读和运行(子项继承; 节点目录另设、不继承) */
+    set_sddl(path, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)");
+}
+
+void p_username(char *out, size_t cap)
+{
+    char u[256]; DWORD n = sizeof u;
+    if (!GetUserNameA(u, &n)) snprintf(u, sizeof u, "?");
+    snprintf(out, cap, "%s", u);
+}
+
+const char *p_invoker(void)
+{
+    static char u[256]; DWORD n = sizeof u;
+    if (!GetUserNameA(u, &n) || !u[0] || u[strlen(u) - 1] == '$' || !_stricmp(u, "SYSTEM")) return NULL;
+    return u;
+}
+
+int p_elevate(int argc, char **argv) { (void)argc; (void)argv; return -1; }   /* 弹 UAC 的话输出在另一个窗口: 不做, 提示用管理员终端 */
+
 int p_rmtree(const char *path)
 {
     DWORD a = GetFileAttributesA(path);
