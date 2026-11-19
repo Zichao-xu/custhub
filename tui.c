@@ -9,7 +9,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16]; int relay, rec, link, self; long age; } row_t;
+typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16], host[64]; int relay, rec, link, self; long age; } row_t;
 typedef struct { char code[8], key[48], from[80], host[64], plat[24], ver[16]; } pend_t;
 
 static row_t RW[MAXM]; static int nrw;
@@ -105,6 +105,7 @@ static void load_ls(void)
         snprintf(r->name, sizeof r->name, "%s", nm); snprintf(r->key, sizeof r->key, "%s", kb);
         r->relay = !strcmp(k, "relay"); snprintf(r->addr, sizeof r->addr, "%s", ad);
         uint8_t ed[32]; if (b64_decode(kb, strlen(kb), ed, 32) == 32) join_code(ed, r->code);
+        const char *h = strstr(ln, " host="); if (h) sscanf(h + 6, "%63s", r->host);
     }
     sv = NULL; int sec = 0;
     for (char *ln = m_tok(l, "\n", &sv); ln; ln = m_tok(NULL, "\n", &sv)) {
@@ -189,7 +190,7 @@ static void draw(void)
     snprintf(head, sizeof head, " custhub %s · 本机 %s · 主钥匙: %s%s", CH_VERSION, me, unlocked ? "已解锁" : "未解锁",
              watching ? " · 等新机器报到…" : "");
     out("\x1b[7m"); cell(head, cols); out("\x1b[0m\r\n");
-    out("\x1b[1m"); cell("  名字              状态    版本      连接", cols); out("\x1b[0m\r\n");
+    out("\x1b[1m"); cell("  名字          状态    机器名            版本      连接", cols); out("\x1b[0m\r\n");
     int nitems = nrw + (unlocked ? npd : 0);
     if (sel >= nitems) sel = nitems ? nitems - 1 : 0;
     int area = rows - 7 - (unlocked && npd ? 1 : 0);
@@ -207,10 +208,11 @@ static void draw(void)
             else snprintf(conn, sizeof conn, "%s", r->relay ? r->addr : "-");
             if (r->link && r->relay) strcat(conn, ")");
             out(i == sel ? "\x1b[7m" : "");
-            snprintf(line, sizeof line, "%s %-18s", i == sel ? ">" : " ", r->name); cell(line, 20);
+            snprintf(line, sizeof line, "%s %-13s", i == sel ? ">" : " ", r->name); cell(line, 16);
             out(i == sel ? "" : on ? "\x1b[32m" : "\x1b[2m"); cell(r->self ? "本机" : on ? "在线" : "离线", 8); out(i == sel ? "" : "\x1b[0m");
+            cell(r->host[0] ? r->host : "-", 18);
             cell(r->ver[0] ? r->ver : "-", 10);
-            cell(conn, cols - 38);
+            cell(conn, cols - 52);
             out("\x1b[0m\r\n");
         } else {
             pend_t *p = &PD[i - nrw];
@@ -380,18 +382,17 @@ static void act_approve(void)
     if (sel < nrw || sel - nrw >= npd) { set_msg(1, "先选中下面待批准的一台"); return; }
     pend_t *p = &PD[sel - nrw];
     char nm[64] = "";
-    for (const char *h = p->host; *h && strlen(nm) < 24; h++) {     /* 默认名字: 机器名转小写, 只留字母数字和 - */
-        char c = *h; if (c >= 'A' && c <= 'Z') c += 32; if (c == '_' || c == '.') c = '-';
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') { size_t l = strlen(nm); nm[l] = c; nm[l + 1] = 0; }
-    }
-    char ask[200]; snprintf(ask, sizeof ask, " 批准 %s, 起名(回车用默认, Esc 取消): ", p->code);
-    if (!prompt(ask, nm, sizeof nm) || !nm[0]) return;
-    static char o[4096];
-    int rc = self_run(o, sizeof o, "key", "--dir", tdir, "approve", p->code, nm, (const char *)NULL);
-    char l[400]; last_line(o, l, sizeof l);
+    char ask[200]; snprintf(ask, sizeof ask, " 批准 %s(%s), 起名(回车 = 自动编号 A-N, Esc 取消): ", p->code, p->host);
+    if (!prompt(ask, nm, sizeof nm)) return;
+    static char o[4096]; int rc;
+    if (nm[0]) rc = self_run(o, sizeof o, "key", "--dir", tdir, "approve", p->code, nm, (const char *)NULL);
+    else rc = self_run(o, sizeof o, "key", "--dir", tdir, "approve", p->code, (const char *)NULL);
+    char l[400] = ""; const char *hit = strstr(o, "已批准 ");
+    if (hit) { const char *e = strchr(hit, '\n'); snprintf(l, sizeof l, "%.*s", (int)(e ? e - hit : (long)strlen(hit)), hit); } else last_line(o, l, sizeof l);
     set_msg(rc != 0, "%s", l);
+    char got[40] = ""; if (hit) sscanf(hit + 10, "%39[^(]", got);
     load_ls(); load_pending();
-    for (int i = 0; i < nrw; i++) if (!strcmp(RW[i].name, nm)) sel = i;
+    for (int i = 0; i < nrw; i++) if (got[0] && !strcmp(RW[i].name, got)) sel = i;
 }
 
 static void act_sign(void)

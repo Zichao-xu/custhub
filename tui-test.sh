@@ -65,12 +65,12 @@ until(r'待批准', 15)
 for _ in range(6): os.write(fd, b'j'); pump(0.2)
 out['pend'] = screen()
 os.write(fd, b'a'); pump(1); os.write(fd, b'\r')
-out['approved'] = until(r'已批准 host-x', 20); out['after_approve'] = screen()
-until(r'host-x .*在线', 20)
+out['approved'] = until(r'已批准 A-1', 20); out['after_approve'] = screen()
+until(r'A-1 .*在线', 20)
 # 选中 host-x: 回到顶再往下找
 for _ in range(6): os.write(fd, b'k'); pump(0.1)
 for _ in range(6):
-    if re.search(r'> host-x', screen()): break
+    if re.search(r'> A-1', screen()): break
     os.write(fd, b'j'); pump(0.3)
 os.write(fd, b's'); pump(0.5); os.write(fd, b'\r'); pump(0.3); os.write(fd, b'\r'); pump(0.3); os.write(fd, b'\r')
 out['signed'] = until(r'通行证签好了', 15); out['after_sign'] = screen()
@@ -93,13 +93,14 @@ echo "== 1 列表"
 s=$(j list); echo "$s" | grep -q "主钥匙: 已解锁" && echo "$s" | grep -qE "^[ >] r +在线" && echo "$s" | grep -q "adm .*本机" && ok "列表: r 在线、adm 本机、主钥匙已解锁" || ng "列表: $s"
 echo "== 2 批准"
 s=$(j pend); echo "$s" | grep -q "> .*host-x" && ok "待批准里有 host-x(带接入码、机器名)" || ng "待批准: $s"
-[ -n "$(j approved)" ] && ok "a + 回车: 用默认名 host-x 批准" || ng "批准: $(j after_approve)"
+[ -n "$(j approved)" ] && ok "a + 回车: 自动编号 A-1 批准(机器名 host-x 记进备注)" || ng "批准: $(j after_approve)"
 echo "== 3 签证 + shell"
-[ -n "$(j signed)" ] && ok "s + 三次回车: 给本机签进 host-x 的通行证(默认 sh、2 小时)" || ng "签证: $(j after_sign)"
-[ -n "$(j shell)" ] && ok "Enter 开 shell, 命令在 host-x 上跑了" || ng "shell 没跑"
+[ -n "$(j signed)" ] && ok "s + 三次回车: 给本机签进 A-1 的通行证(默认 sh、2 小时)" || ng "签证: $(j after_sign)"
+[ -n "$(j shell)" ] && ok "Enter 开 shell, 命令在 A-1 上跑了" || ng "shell 没跑"
 [ -n "$(j back)" ] && ok "exit 回到列表" || ng "没回到列表"
+s=$(j after_sign); echo "$s" | grep -qE "A-1 +在线 +host-x" && ok "列表里有机器名一列(host-x)" || ng "机器名列: $s"
 echo "== 4 移出"
-[ -n "$(j removed)" ] && ! echo "$(j after_remove2)" | grep -q "host-x  " && ok "d + y: 移出 host-x" || ng "移出: $(j after_remove2)"
+[ -n "$(j removed)" ] && ! echo "$(j after_remove2)" | grep -q "A-1  " && ok "d + y: 移出 A-1" || ng "移出: $(j after_remove2)"
 echo "== 5 上锁"
 s=$(j after_lock); [ -n "$(j locked)" ] && echo "$s" | grep -q "u 解锁主钥匙" && ! echo "$s" | grep -q "a 批准" && ok "l 上锁: 管理功能藏起来, 提示 u 解锁" || ng "上锁: $s"
 ssh-add -L 2>/dev/null | grep -q custhub-master && ng "上锁后 agent 里还有主钥匙" || ok "agent 里没有主钥匙了"

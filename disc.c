@@ -80,6 +80,8 @@ int mtrust_parse(const char *text, size_t len, trust_t *t, const uint8_t master[
         ed_to_x(m->ed, m->x);
         m->relay = relay;
         if (relay) snprintf(m->addr, sizeof m->addr, "%s", ad);
+        const char *h = strstr(ln, " host=");               /* 备注: 老版本按空格只读前 4 段, 多出来的不认也不报错 */
+        if (h) sscanf(h + 6, "%63s", m->host);
     }
     if (t->ver <= 0) return -1;
     memcpy(t->text, text, len); t->tlen = len;

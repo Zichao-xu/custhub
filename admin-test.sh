@@ -19,8 +19,8 @@ eval "$(ssh-agent -s)" >/dev/null
 CUSTHUB_PASSPHRASE="$PH" $M masterpub >"$T/master.pub"
 K(){ $M key --dir "$T/adm" "$@"; }
 
-for n in r adm x; do mkdir -p "$T/$n"; $M keygen "$T/$n" >"$T/$n.pub"; done
-i=0; for n in r adm x; do i=$((i+1))
+for n in r adm x y z; do mkdir -p "$T/$n"; $M keygen "$T/$n" >"$T/$n.pub"; done
+i=0; for n in r adm x y z; do i=$((i+1))
   printf 'master %s\nctl 127.0.0.1:%s\nlog %s/%s.log\nupnp off\nhello host-%s\n' "$(cut -d' ' -f1,2 "$T/master.pub")" $((base+10+i)) "$T" "$n" "$n" >"$T/$n/conf"
   [ $n = r ] || echo "relay off" >>"$T/$n/conf"
 done
@@ -36,8 +36,8 @@ ssh-add -L | grep -q "custhub-master$" && [ "$(ssh-add -L | grep custhub-master$
 # 初始名单 v1 用 agent 里的主钥匙签(ssh-keygen 认 agent 里的钥匙)
 { echo "custhub-mesh-trust 1"; echo "relay r $(cat "$T/r.pub") 127.0.0.1:$PR"; echo "node adm $(cat "$T/adm.pub")"; echo "--end--"; } >"$T/d1"
 ssh-keygen -q -Y sign -f "$T/master.pub" -n custhub-mesh-trust "$T/d1" 2>/dev/null && cat "$T/d1" "$T/d1.sig" >"$T/t1" || ng "ssh-keygen 用 agent 签不了"
-for n in r adm x; do cp "$T/t1" "$T/$n/trust"; done
-for n in r adm x; do CUSTHUB_MESH_PENDING_S=2 $M run "$T/$n" 2>/dev/null & done
+for n in r adm x y z; do cp "$T/t1" "$T/$n/trust"; done
+for n in r adm x y z; do CUSTHUB_MESH_PENDING_S=2 $M run "$T/$n" 2>/dev/null & done
 wait_for 15 sh -c "$M ls $T/adm | grep -qE '^  r .* 通$'"
 
 echo "== 2 批准 / 移除"
@@ -54,9 +54,20 @@ K remove x1 >/dev/null 2>&1
 wait_for 15 grep -q "名单 v2 → v3" "$T/x.log"
 ! K ls | grep -q "x1" && ok "移除 x1: 名单 v3 里没有了" || ng "移除后 ls: $(K ls)"
 
+echo "== 2b 自动编号 / 机器名备注 / 改名"
+cy=$($M code "$T/y"); cz=$($M code "$T/z")
+wait_for 15 sh -c "$M key --dir $T/adm pending | grep -q $cz"
+o=$(K approve "$cy" 2>&1); echo "$o" | grep -q "已批准 A-1(接入码 $cy, 机器名 host-y)" && ok "不写名字: 自动编号 A-1, 机器名 host-y 记进备注" || ng "自动编号: $o"
+K ls | grep -qE "^  A-1 +$cy  host-y " && ok "key ls 有机器名一列" || ng "ls: $(K ls)"
+grep -q "^node A-1 $(cat "$T/y.pub") host=host-y$" <(K ls >/dev/null; $M ctl "$T/adm" TRUST) && ok "名单行: node A-1 <公钥> host=host-y" || ng "名单: $($M ctl "$T/adm" TRUST | grep A-1)"
+o=$(K rename A-1 yy 2>&1); echo "$o" | grep -q "A-1 改名为 yy" && K ls | grep -qE "^  yy +$cy  host-y " && ok "rename: 改名, 机器名备注跟着" || ng "rename: $o / $(K ls)"
+wait_for 15 grep -q "名字 yy" "$T/y.log"
+grep -q "名字 yy" "$T/y.log" && ok "y 知道自己改叫 yy 了" || ng "y 日志: $(grep 名单 "$T/y.log" | tail -2)"
+o=$(K approve "$cz" 2>&1); echo "$o" | grep -q "已批准 A-2" && ok "A-1 改名后不再复用: 下一台是 A-2" || ng "号复用了: $o"
+
 echo "== 3 种子 / 发布清单 / 通行证"
 K seed --github example/repo --out "$T/seed" 2>/dev/null
-head -3 "$T/seed" | grep -q "^master $(cut -d' ' -f1,2 "$T/master.pub") custhub-master$" && grep -q "^github example/repo$" "$T/seed" && grep -q "^custhub-mesh-trust 3$" "$T/seed" && ok "种子: 主公钥 + 仓库 + 当前名单 v3" || ng "种子: $(head -5 "$T/seed")"
+head -3 "$T/seed" | grep -q "^master $(cut -d' ' -f1,2 "$T/master.pub") custhub-master$" && grep -q "^github example/repo$" "$T/seed" && grep -qE "^custhub-mesh-trust (6|7)$" "$T/seed" && ok "种子: 主公钥 + 仓库 + 当前名单" || ng "种子: $(head -5 "$T/seed")"
 cp "$M" "$T/custhub3-0.0.9-t1"
 K release 0.0.9 "$T/custhub3-0.0.9-t1" --only "adm" --out "$T/custhub3.release" 2>/dev/null
 sed '/^--end--$/q' "$T/custhub3.release" >"$T/rb"; sed -n '/BEGIN SSH SIGNATURE/,$p' "$T/custhub3.release" >"$T/rb.sig"

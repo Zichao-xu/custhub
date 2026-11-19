@@ -59,7 +59,7 @@ int  ident_new(const char *path, ident_t *id);
 void ed_to_x(const uint8_t ed[32], uint8_t x[32]);
 
 /* ---------- 名单 / 位置记录 (disc.c) ---------- */
-typedef struct { char name[32]; uint8_t ed[32], x[32]; int relay; char addr[64]; } member_t;
+typedef struct { char name[32]; uint8_t ed[32], x[32]; int relay; char addr[64], host[64]; } member_t;   /* host: 批准时记下的机器名(名单行末 host=…, 只作备注) */
 typedef struct { long ver; int n; member_t m[MAXM]; char text[MAXTEXT]; size_t tlen; } trust_t;
 typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;

@@ -309,6 +309,34 @@ static int key_release(int argc, char **argv)
     return 0;
 }
 
+/* 自动编号 A-1, A-2 …: 取名单里最大的 A-N 和本机记的(移出过的号不再用)里大的那个 +1 */
+#define NUMPFX "A-"
+static int next_number(const char *dir)
+{
+    int mx = 0; char p[1300], t[64];
+    for (int i = 0; i < G.trust.n; i++) {
+        const char *nm = G.trust.m[i].name; char *e;
+        if (!strncmp(nm, NUMPFX, 2)) { long v = strtol(nm + 2, &e, 10); if (!*e && v > mx) mx = (int)v; }
+    }
+    snprintf(p, sizeof p, "%s/numbers", dir);
+    if (m_read(p, t, sizeof t) > 0) { int v = atoi(t); if (v > mx) mx = v; }
+    return mx + 1;
+}
+static void number_used(const char *dir, const char *name)
+{
+    char *e; if (strncmp(name, NUMPFX, 2)) return;
+    long v = strtol(name + 2, &e, 10); if (*e || v <= 0) return;
+    char p[1300], t[64]; snprintf(p, sizeof p, "%s/numbers", dir);
+    if (m_read(p, t, sizeof t) > 0 && atoi(t) >= v) return;
+    int n = snprintf(t, sizeof t, "%ld\n", v); m_write(p, t, (size_t)n);
+}
+static void host_clean(const char *in, char *out, size_t cap)   /* 机器名备注: 只留字母数字 - _ . */
+{
+    size_t o = 0;
+    for (; *in && o + 1 < cap; in++) if ((*in >= 'a' && *in <= 'z') || (*in >= 'A' && *in <= 'Z') || (*in >= '0' && *in <= '9') || *in == '-' || *in == '_' || *in == '.') out[o++] = *in;
+    out[o] = 0;
+}
+
 int cmd_key(int argc, char **argv)
 {
     char dir[1200] = "";
@@ -386,7 +414,7 @@ loaded:
         printf("名单 v%ld(%d 个成员)\n", G.trust.ver, G.trust.n);
         for (int i = 0; i < G.trust.n; i++) {
             char code[8], b[48]; join_code(G.trust.m[i].ed, code); b64_encode(G.trust.m[i].ed, 32, b);
-            printf("  %-14s %s  %s%s%s\n", G.trust.m[i].name, code, b, G.trust.m[i].relay ? "  种子 " : "", G.trust.m[i].relay ? G.trust.m[i].addr : "");
+            printf("  %-14s %s  %-18s %s%s%s\n", G.trust.m[i].name, code, G.trust.m[i].host[0] ? G.trust.m[i].host : "-", b, G.trust.m[i].relay ? "  种子 " : "", G.trust.m[i].relay ? G.trust.m[i].addr : "");
         }
         return 0;
     }
@@ -405,11 +433,11 @@ loaded:
     }
     if (!strcmp(c, "pending") || !strcmp(c, "approve")) {
         static char t[65536];
-        if (!strcmp(c, "approve") && (k != 3 || !name_ok(av[2]))) { fprintf(stderr, "用法: custhub key approve <接入码> <名字(字母数字 _ -, 最多 31)>\n"); return 2; }
+        if (!strcmp(c, "approve") && (k < 2 || k > 3 || (k == 3 && !name_ok(av[2])))) { fprintf(stderr, "用法: custhub key approve <接入码> [名字(字母数字 _ -, 最多 31; 不写 = 自动编号 " NUMPFX "N)]\n"); return 2; }
         if (pending_text(dir, t, sizeof t) < 0) return 1;
         char want[8] = "";
-        if (k == 3) { for (int i = 0, o = 0; av[1][i] && o < 7; i++) { char ch = av[1][i]; if (ch == '-') continue; if (ch >= 'a' && ch <= 'z') ch -= 32; want[o++] = ch; if (o == 3) want[o++] = '-'; } }
-        char hit[48] = ""; int shown = 0;
+        if (k >= 2) { for (int i = 0, o = 0; av[1][i] && o < 7; i++) { char ch = av[1][i]; if (ch == '-') continue; if (ch >= 'a' && ch <= 'z') ch -= 32; want[o++] = ch; if (o == 3) want[o++] = '-'; } }
+        char hit[48] = "", hhost[64] = ""; int shown = 0;
         char *sv = NULL;
         for (char *l = m_tok(t, "\n", &sv); l; l = m_tok(NULL, "\n", &sv)) {
             char rly[40], edb[64], ts[24], from[80], info[300] = "";
@@ -418,21 +446,36 @@ loaded:
             if (b64_decode(edb, strlen(edb), ed, 32) != 32 || member_by_ed(ed)) continue;
             join_code(ed, code);
             if (!strcmp(c, "pending")) { printf("  %s  %s  来自 %s(经 %s)  %s\n", code, edb, from, rly, info); shown++; }
-            else if (!strcmp(code, want)) snprintf(hit, sizeof hit, "%s", edb);
+            else if (!strcmp(code, want)) { snprintf(hit, sizeof hit, "%s", edb); char h0[64] = ""; sscanf(info, "%63s", h0); host_clean(h0, hhost, sizeof hhost); }
         }
         if (!strcmp(c, "pending")) { if (!shown) printf("没有待批准的\n"); return 0; }
         if (!hit[0]) { fprintf(stderr, "待批准里没有接入码 %s 的机器(custhub key pending 看看)\n", want); return 1; }
-        if (member_by_name(av[2])) { fprintf(stderr, "名字 %s 已经有人用了\n", av[2]); return 1; }
-        char line[160]; snprintf(line, sizeof line, "node %s %s", av[2], hit);
+        char nm[40];
+        if (k == 3) snprintf(nm, sizeof nm, "%s", av[2]); else snprintf(nm, sizeof nm, NUMPFX "%d", next_number(dir));
+        if (member_by_name(nm)) { fprintf(stderr, "名字 %s 已经有人用了\n", nm); return 1; }
+        char line[200]; int ll = snprintf(line, sizeof line, "node %s %s", nm, hit);
+        if (hhost[0]) snprintf(line + ll, sizeof line - (size_t)ll, " host=%s", hhost);
         int r = trust_edit(dir, NULL, line);
-        if (!r) printf("已批准 %s(接入码 %s), 新名单正沿链路传开\n", av[2], want);
+        if (!r) { number_used(dir, nm); printf("已批准 %s(接入码 %s%s%s), 新名单正沿链路传开\n", nm, want, hhost[0] ? ", 机器名 " : "", hhost); }
+        return r;
+    }
+    if (!strcmp(c, "rename")) {                          /* 改名: 公钥、地址、机器名备注都不变 */
+        if (k != 3 || !member_by_name(av[1]) || !name_ok(av[2])) { fprintf(stderr, "用法: custhub key rename <名单里的名字> <新名字(字母数字 _ -, 最多 31)>\n"); return 2; }
+        if (member_by_name(av[2])) { fprintf(stderr, "名字 %s 已经有人用了\n", av[2]); return 1; }
+        member_t *m = member_by_name(av[1]);
+        char kb[48], line[240]; b64_encode(m->ed, 32, kb);
+        int ll = snprintf(line, sizeof line, "%s %s %s", m->relay ? "relay" : "node", av[2], kb);
+        if (m->relay && m->addr[0]) ll += snprintf(line + ll, sizeof line - (size_t)ll, " %s", m->addr);
+        if (m->host[0]) snprintf(line + ll, sizeof line - (size_t)ll, " host=%s", m->host);
+        int r = trust_edit(dir, av[1], line);
+        if (!r) { number_used(dir, av[2]); printf("%s 改名为 %s\n", av[1], av[2]); }
         return r;
     }
     if (!strcmp(c, "remove")) {
         if (k != 2 || !member_by_name(av[1])) { fprintf(stderr, "用法: custhub key remove <名单里的名字>\n"); return 2; }
         return trust_edit(dir, av[1], NULL);
     }
-    fprintf(stderr, "用法: custhub key unlock [小时] | lock | status | pending | approve <接入码> <名字> | remove <名字> | ls\n"
+    fprintf(stderr, "用法: custhub key unlock [小时] | lock | status | pending | approve <接入码> [名字] | rename <名字> <新名字> | remove <名字> | ls\n"
                     "                  | pass … | seed [--github 仓库] [--trust 名单 --master 主公钥] [--out 文件]\n"
                     "                  | sign-trust <名单正文> [--master 主公钥] [--out 文件] | release <版本> <文件>… [--only …] [--out 文件]   [--dir 节点目录]\n");
     return 2;

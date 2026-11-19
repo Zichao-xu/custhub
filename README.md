@@ -46,7 +46,9 @@ custhub join --user --github <owner>/<repo>
 ```sh
 custhub key unlock                      # 输入 12 个词, 主钥匙进 ssh-agent(默认 8 小时)
 custhub key pending                     # 待批准的机器, 带接入码
-custhub key approve R44-CQP office-pc   # 按接入码批准并起名
+custhub key approve R44-CQP             # 按接入码批准: 自动编号 A-1、A-2 …(对方机器名记进备注)
+custhub key approve R44-CQP office-pc   # 或者自己起名
+custhub key rename A-3 office-pc        # 改名(编号不会再分给别人)
 custhub key pass --to office-pc --svc "sh port:3389" --hours 2   # 给本机签通行证(--svc 默认 sh)
 custhub sh office-pc                    # 交互 shell
 custhub sh office-pc -- ipconfig        # 跑一条命令, 退出码原样带回
