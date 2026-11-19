@@ -18,7 +18,7 @@ ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 t60(){ perl -e 'alarm shift; exec @ARGV' 60 "$@"; }
 V=vendor
 zig cc -target x86_64-windows-gnu -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -DCH_VERSION='"0.0.0"' -DCH_PLAT='"win-x64"' -o "$T/mesh.exe" \
-  mesh_main.c main.c util.c b64.c noise.c link.c hop.c disc.c qual.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c tui.c plat_win.c \
+  mesh_main.c main.c util.c b64.c noise.c link.c hop.c disc.c qual.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c tui.c plat_win.c plat_win10.c \
   sshsig.c $V/monocypher.c $V/monocypher-ed25519.c -lws2_32 -ladvapi32 -lshell32 -luser32 || exit 1
 rm -f "$T"/*.pdb
 base=$((20000 + RANDOM % 20000))

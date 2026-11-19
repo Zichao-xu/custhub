@@ -17,10 +17,16 @@
 curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.sh | sh
 ```
 
-**Windows 10 1809 及以上**（用管理员身份打开 PowerShell）
+**Windows 10 / 11**（用管理员身份打开 PowerShell）
 
 ```powershell
 irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1 | iex
+```
+
+**Windows 7 / 8**（管理员 PowerShell；要 .NET 4.5 以上才能连 GitHub）
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol=3072; iex (New-Object Net.WebClient).DownloadString('https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1')
 ```
 
 它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向中继报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。跑接入的那个账号（用 sudo 时是 sudo 之前的账号）会加进本机的 `custhub` 用户组，重新登录后不用 sudo 就能 `custhub sh / connect / ls / pass`；别的账号用 `sudo custhub user add <账号>` 加（`user del` 移出，`user ls` 列出）。组里的账号经本机守护办事，碰不到节点钥匙；但能用本机的通行证开别的机器的 shell，只加可信的人。`join`、`remove`、`user`、`key` 要 root，不是 root 时自动换成 `sudo`（Windows 上提示用管理员终端）。
@@ -94,6 +100,7 @@ custhub key lock
 | OpenWrt | procd | 伪终端 |
 | macOS（arm64 / x86_64） | launchd | 伪终端 |
 | Windows 10 1809 及以上（x64 / x86） | 计划任务（SYSTEM） | 交互用 ConPTY，跑命令用管道 |
+| Windows 7 / 8 / 8.1（x64 / x86，补丁模块 `plat_win7.c`，链 msvcrt） | 计划任务（SYSTEM） | 管道 + 守护这边做行编辑回显（没有 ConPTY）；没有终端界面 |
 
 ## 编译与测试
 
@@ -127,7 +134,7 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 | 连通（链路、中继、找人、自检、UPnP、控制口） | `link.c` `hop.c` `disc.c` `qual.c` `upnp.c` `app.c` |
 | 身份（握手、签名、口令派生） | `noise.c` `sig.c` `sshsig.c` `kdf.c` |
 | 部署 / 管理端 | `join.c` `key.c` |
-| 平台模块（编译时选一个） | `plat_posix.c` / `plat_win.c`，接口 `plat.h` |
+| 平台模块（编译时选一个） | `plat_posix.c` / `plat_win.c` + 版本模块 `plat_win10.c` 或 `plat_win7.c`，接口 `plat.h` |
 
 ## 许可证
 

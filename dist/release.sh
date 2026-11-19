@@ -34,3 +34,4 @@ gh release create "v$V" --repo "$REPO" --title "custhub v$V" --latest --notes "c
 echo "已发布 v$V($REPO)。接入:"
 echo "  Linux / OpenWrt / macOS:  curl -fsSL https://github.com/$REPO/releases/latest/download/custhub3-join.sh | sh"
 echo "  Windows(管理员 PowerShell): irm https://github.com/$REPO/releases/latest/download/custhub3-join.ps1 | iex"
+echo "  Windows 7 / 8(管理员 PowerShell): [Net.ServicePointManager]::SecurityProtocol=3072; iex (New-Object Net.WebClient).DownloadString('https://github.com/$REPO/releases/latest/download/custhub3-join.ps1')"

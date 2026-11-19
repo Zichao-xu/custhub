@@ -335,6 +335,8 @@ int p_tty_raw(int on)
     return 1;
 }
 
+int p_tty_ansi(void) { return 1; }
+
 int p_tty_size(int *rows, int *cols)
 {
     struct winsize ws;

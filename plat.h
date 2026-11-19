@@ -60,6 +60,7 @@ void p_pty_close(int h);                    /* 还在跑就挂断它(Windows: �
 
 /* ---------- 本地终端(sh 客户端) ---------- */
 int  p_tty_raw(int on);                     /* 标准输入是终端时切原始模式 / 恢复; 返回是不是终端 */
+int  p_tty_ansi(void);                      /* 终端认不认 ANSI 转义(颜色、光标); Win7 控制台不认 */
 int  p_tty_size(int *rows, int *cols);      /* 0 拿到了 */
 int  p_tty_resized(void);                   /* 上次问过之后窗口大小变过 */
 int  p_read_secret(const char *prompt, char *buf, size_t cap);   /* 从终端读一行, 不回显; 0 成功 */

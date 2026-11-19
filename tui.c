@@ -454,14 +454,17 @@ static void act_new_client(void)
     if (g) sscanf(g + 8, "%99s", repo);
     char u[200]; snprintf(u, sizeof u, "https://github.com/%s/releases/latest/download", repo);
     /* 一行通用: Windows(Win+R / cmd / PowerShell, 弹 UAC)前半段; Mac / Linux 终端后半段。Win+R 上限 259 字符 */
-    static char line[600], text[2400];
+    static char line[600], line7[600], text[3200];
     snprintf(line, sizeof line, "powershell -c \"start powershell -verb runas -args 'irm https://ghfast.top/%s/custhub3-join.ps1|iex;pause'\"; curl -fsSL %s/custhub3-join.sh|sh", u, u);
+    /* Win7 / 8: PowerShell 2.0 没有 irm, TLS 1.2 要自己开(要 .NET 4.5) */
+    snprintf(line7, sizeof line7, "powershell -c \"start powershell -verb runas -args '[Net.ServicePointManager]::SecurityProtocol=3072;iex(New-Object Net.WebClient).DownloadString(''https://ghfast.top/%s/custhub3-join.ps1'');pause'\"", u);
     osc52(line);
     snprintf(text, sizeof text,
              "接入命令(已试着放进剪贴板; 终端不支持的话, 从下面复制):\n\n%s\n\n"
-             "  Windows 10 1809 起: Win+R / cmd / PowerShell 里粘贴运行, 弹 UAC 点\"是\"\n"
+             "  Windows 10 / 11: Win+R / cmd / PowerShell 里粘贴运行, 弹 UAC 点\"是\"\n"
              "  Mac / Linux: 终端里粘贴运行(会要一次 sudo 密码)\n\n"
-             "对方跑起来后, 这里会提示\"新机器报到\", 选中按 a 批准(最多等 30 分钟)。\n", line);
+             "Windows 7 / 8 用这条(cmd 里粘贴; 要 .NET 4.5 以上):\n\n%s\n\n"
+             "对方跑起来后, 这里会提示\"新机器报到\", 选中按 a 批准(最多等 30 分钟)。\n", line, line7);
     pager(" 新客户接入", text);
     watching = 1; watch_end = now_ms() + 1800000;
     size_t n = 0; watch_base[0] = 0;
@@ -481,6 +484,7 @@ int cmd_tui(const char *dir)
     p_close(fd); (void)probe;
     G.quiet = 1;
     if (!p_tty_raw(1)) { p_tty_raw(0); fprintf(stderr, "不是终端: custhub help 看命令\n"); return 2; }
+    if (!p_tty_ansi()) { p_tty_raw(0); fprintf(stderr, "这个终端不认 ANSI(Win7 控制台), 没有界面: 用命令行(custhub help)\n"); return 2; }
     in_fd = p_stdin_fd();
     screen(1);
     load_ls(); load_status(); load_pending();

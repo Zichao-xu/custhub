@@ -1,5 +1,6 @@
 /* 平台模块: Windows(Win10 1809 起, design-v3 §0)。只有这里和 plat_posix.c 能 include 系统头文件 */
 #include "plat.h"
+#include "plat_win.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -222,7 +223,7 @@ typedef struct {
     HANDLE proc, job, in_w, out_r;
     hpcon_t hpc;
     SOCKET br;                    /* 桥这一头(阻塞, 线程用) */
-    int core, conpty;             /* core: 交给核心的那一头 */
+    int core, conpty, legacy;     /* core: 交给核心的那一头; legacy: 没有 ConPTY 的交互 shell(版本模块做行编辑) */
 } wpty_t;
 #define MAXPTY 32
 static wpty_t *WP[MAXPTY];
@@ -241,13 +242,22 @@ static void wp_release(wpty_t *w)
 static DWORD WINAPI t_in(LPVOID a)          /* socket → 子进程输入 */
 {
     wpty_t *w = a; char b[16384];
+    void *ls = NULL; char *tc = NULL, *ec = NULL;          /* 每个会话一份(多个 shell 同时开) */
+    if (w->legacy && (!(ls = calloc(1, WINMOD.line_state_size)) || !(tc = malloc(16384 * 2 + 4096)) || !(ec = malloc(16384 * 4 + 4096)))) goto out;
     for (;;) {
         int r = recv(w->br, b, sizeof b, 0);
         if (r <= 0) break;
-        DWORD k;
-        for (int o = 0; o < r; o += (int)k) if (!WriteFile(w->in_w, b + o, (DWORD)(r - o), &k, NULL) || !k) goto out;
+        DWORD k; const char *src = b; int n = r;
+        if (w->legacy) {                                 /* 行编辑: 回显给对方, 整行交给子进程 */
+            int nc = 0, ne = 0;
+            WINMOD.line_edit(ls, b, r, tc, &nc, ec, &ne);
+            for (int o = 0; o < ne;) { int q = send(w->br, ec + o, ne - o, 0); if (q <= 0) goto out; o += q; }
+            src = tc; n = nc;
+        }
+        for (int o = 0; o < n; o += (int)k) if (!WriteFile(w->in_w, src + o, (DWORD)(n - o), &k, NULL) || !k) goto out;
     }
 out:
+    free(ls); free(tc); free(ec);
     if (!w->conpty) { HANDLE h = w->in_w; w->in_w = NULL; CloseHandle(h); }   /* 跑命令: 关掉输入 = 真正的"到头" */
     wp_release(w);
     return 0;
@@ -297,20 +307,23 @@ int p_pty_open(const char *cmd, int rows, int cols, const char *term, int *fd, c
         pc_resize = (resize_pc_t)(void *)GetProcAddress(k, "ResizePseudoConsole");
         pc_close = (close_pc_t)(void *)GetProcAddress(k, "ClosePseudoConsole");
     }
-    if (!cmd && (!pc_create || !pc_resize || !pc_close)) { snprintf(why, wcap, "这台 Windows 没有 ConPTY(要 Win10 1809 以上)"); return -1; }
+    int legacy = !cmd && (!pc_create || !pc_resize || !pc_close);
+    if (legacy && !WINMOD.line_edit) { snprintf(why, wcap, "这台 Windows 没有 ConPTY(要 Win10 1809 以上; Win7 用 win7 版)"); return -1; }
 
     int sp[2];
     if (p_pair(sp)) { snprintf(why, wcap, "开不了 shell 通道"); return -1; }
     wpty_t *w = calloc(1, sizeof *w);
     if (!w) { closesocket((SOCKET)sp[0]); closesocket((SOCKET)sp[1]); snprintf(why, wcap, "内存不足"); return -1; }
-    w->core = sp[0]; w->br = (SOCKET)sp[1]; w->conpty = !cmd;
+    w->core = sp[0]; w->br = (SOCKET)sp[1]; w->conpty = !cmd && !legacy; w->legacy = legacy;
     p_block(sp[1]);
 
     /* 命令行: 交互 = PowerShell(没有就 cmd); 跑命令 = cmd /c, 输出 UTF-8 */
     char sysd[MAX_PATH] = "C:\\Windows", ps[MAX_PATH + 64], line[32768];
     GetEnvironmentVariableA("SystemRoot", sysd, sizeof sysd);
     snprintf(ps, sizeof ps, "%s\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", sysd);
-    if (!cmd) {
+    if (legacy)              /* 没有 ConPTY: 管道接一个交互 cmd(代码页先切 UTF-8, 同跑命令) */
+        snprintf(line, sizeof line, "%s\\System32\\cmd.exe /d /s /c \"chcp 65001 >nul && %s\\System32\\cmd.exe /d\"", sysd, sysd);
+    else if (!cmd) {
         if (GetFileAttributesA(ps) != INVALID_FILE_ATTRIBUTES) snprintf(line, sizeof line, "\"%s\" -NoLogo", ps);
         else snprintf(line, sizeof line, "%s\\System32\\cmd.exe", sysd);
     } else   /* 先切 UTF-8 代码页, 再起一个新的 cmd 跑命令(cmd 启动时就记下代码页, 同一个 cmd 里切了对它自己不算数) */
@@ -325,8 +338,9 @@ int p_pty_open(const char *cmd, int rows, int cols, const char *term, int *fd, c
     LPPROC_THREAD_ATTRIBUTE_LIST al = NULL;
     BOOL ok = FALSE; DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
     const char *fail = "开不了管道";
-    if (!CreatePipe(&in_r, &w->in_w, cmd ? &sa : NULL, 0) || !CreatePipe(&w->out_r, &out_w, cmd ? &sa : NULL, 0)) goto bad;
-    if (cmd) {
+    int piped = cmd || legacy;
+    if (!CreatePipe(&in_r, &w->in_w, piped ? &sa : NULL, 0) || !CreatePipe(&w->out_r, &out_w, piped ? &sa : NULL, 0)) goto bad;
+    if (piped) {
         SetHandleInformation(w->in_w, HANDLE_FLAG_INHERIT, 0);
         SetHandleInformation(w->out_r, HANDLE_FLAG_INHERIT, 0);
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
@@ -427,7 +441,8 @@ void p_pty_close(int h)
 #ifndef DISABLE_NEWLINE_AUTO_RETURN
 #define DISABLE_NEWLINE_AUTO_RETURN 0x0008
 #endif
-static DWORD in_mode, out_mode; static UINT out_cp; static int raw_on, last_r, last_c;
+static DWORD in_mode, out_mode; static UINT out_cp; static int raw_on, last_r, last_c, vt_ok = 1;
+int p_tty_ansi(void) { return vt_ok; }
 
 int p_tty_raw(int on)
 {
@@ -436,8 +451,9 @@ int p_tty_raw(int on)
     if (!GetConsoleMode(in, &m)) return 0;
     if (on && !raw_on) {
         in_mode = m; GetConsoleMode(out, &out_mode); out_cp = GetConsoleOutputCP();
-        SetConsoleMode(in, (m | ENABLE_VIRTUAL_TERMINAL_INPUT) & ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT));
-        SetConsoleMode(out, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
+        DWORD raw = m & ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+        if (!SetConsoleMode(in, raw | ENABLE_VIRTUAL_TERMINAL_INPUT)) SetConsoleMode(in, raw);   /* Win7 控制台不认 VT 标志: 不带它再来 */
+        vt_ok = SetConsoleMode(out, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN) != 0;
         SetConsoleOutputCP(CP_UTF8);
         raw_on = 1;
         p_tty_size(&last_r, &last_c);
@@ -642,6 +658,7 @@ static struct {
     BOOL (WINAPI *read)(HINET_, LPVOID, DWORD, LPDWORD);
     BOOL (WINAPI *close)(HINET_);
     BOOL (WINAPI *timeouts)(HINET_, int, int, int, int);
+    BOOL (WINAPI *setopt)(HINET_, DWORD, LPVOID, DWORD);
 } WH;
 
 static int wh_load(void)
@@ -656,6 +673,7 @@ static int wh_load(void)
     L(send, "WinHttpSendRequest"); L(recv, "WinHttpReceiveResponse"); L(query, "WinHttpQueryHeaders");
     L(read, "WinHttpReadData"); L(close, "WinHttpCloseHandle"); L(timeouts, "WinHttpSetTimeouts");
 #undef L
+    *(FARPROC *)&WH.setopt = GetProcAddress(m, "WinHttpSetOption");   /* 可选 */
     st = 1;
     return 0;
 }
@@ -676,6 +694,8 @@ static DWORD WINAPI t_fetch(LPVOID a)
     s = WH.open(L"custhub", 0 /* WINHTTP_ACCESS_TYPE_DEFAULT_PROXY */, NULL, NULL, 0);
     if (!s) goto out;
     WH.timeouts(s, 15000, 15000, 30000, 60000);
+    if (WH.setopt) { DWORD pr = 0x80 | 0x200 | 0x800;      /* TLS 1.0 / 1.1 / 1.2: Win7 默认不开 1.2(GitHub 要 1.2); 系统不支持就照旧, 取不到包由网内节点兜底 */
+                     WH.setopt(s, 84 /* WINHTTP_OPTION_SECURE_PROTOCOLS */, &pr, sizeof pr); }
     c = WH.connect(s, host, u.nPort, 0);
     if (!c) goto out;
     r = WH.req(c, L"GET", path, NULL, NULL, NULL, u.nScheme == 2 /* INTERNET_SCHEME_HTTPS */ ? 0x00800000 /* WINHTTP_FLAG_SECURE */ : 0);
