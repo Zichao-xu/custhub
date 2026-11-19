@@ -9,6 +9,8 @@
 #include <sddl.h>
 #include <tlhelp32.h>
 #include <stdio.h>
+#include <io.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -443,11 +445,18 @@ void p_pty_close(int h)
 #define DISABLE_NEWLINE_AUTO_RETURN 0x0008
 #endif
 static DWORD in_mode, out_mode; static UINT out_cp; static int raw_on, last_r, last_c, vt_ok = 1;
-int p_tty_ansi(void) { return vt_ok; }
+int p_tty_ansi(void) { return vt_ok || WINMOD.con_write; }   /* Win7: 控制台不认, 版本模块翻译 */
+
+static HANDLE con_out(void)                      /* 控制台输出: 标准输出被换成管道(中文转发)后也找得到 */
+{
+    static HANDLE h;
+    if (!h) { h = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL); if (h == INVALID_HANDLE_VALUE) h = GetStdHandle(STD_OUTPUT_HANDLE); }
+    return h;
+}
 
 int p_tty_raw(int on)
 {
-    HANDLE in = GetStdHandle(STD_INPUT_HANDLE), out = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE), out = con_out();
     DWORD m;
     if (!GetConsoleMode(in, &m)) return 0;
     if (on && !raw_on) {
@@ -455,7 +464,7 @@ int p_tty_raw(int on)
         DWORD raw = m & ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
         if (!SetConsoleMode(in, raw | ENABLE_VIRTUAL_TERMINAL_INPUT)) SetConsoleMode(in, raw);   /* Win7 控制台不认 VT 标志: 不带它再来 */
         vt_ok = SetConsoleMode(out, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN) != 0;
-        SetConsoleOutputCP(CP_UTF8);
+        if (vt_ok) SetConsoleOutputCP(CP_UTF8);         /* 不认 ANSI 的(Win7)不切: 点阵字体显示不了 UTF-8, 输出由版本模块转成 UTF-16 写 */
         raw_on = 1;
         p_tty_size(&last_r, &last_c);
     } else if (!on && raw_on) { SetConsoleMode(in, in_mode); SetConsoleMode(out, out_mode); SetConsoleOutputCP(out_cp); raw_on = 0; }
@@ -465,7 +474,7 @@ int p_tty_raw(int on)
 int p_tty_size(int *rows, int *cols)
 {
     CONSOLE_SCREEN_BUFFER_INFO i;
-    if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &i)) return -1;
+    if (!GetConsoleScreenBufferInfo(con_out(), &i)) return -1;
     *rows = i.srWindow.Bottom - i.srWindow.Top + 1; *cols = i.srWindow.Right - i.srWindow.Left + 1;
     return 0;
 }
@@ -481,9 +490,16 @@ int p_tty_resized(void)
 static DWORD WINAPI t_stdin(LPVOID a)       /* 标准输入(控制台或管道) → socket */
 {
     SOCKET s = (SOCKET)(intptr_t)a; char b[16384]; DWORD r;
-    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
-    while (ReadFile(in, b, sizeof b, &r, NULL) && r)
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE); DWORD m;
+    for (;;) {
+        if (raw_on && !vt_ok && WINMOD.key_read && GetConsoleMode(in, &m)) {   /* Win7: 读按键事件自己翻(方向键等原样读不到) */
+            int k = WINMOD.key_read(in, b, sizeof b);
+            if (k < 0) break;
+            r = (DWORD)k;
+            if (!r) continue;
+        } else if (!ReadFile(in, b, sizeof b, &r, NULL) || !r) break;
         for (DWORD o = 0; o < r;) { int k = send(s, b + o, (int)(r - o), 0); if (k <= 0) return 0; o += (DWORD)k; }
+    }
     shutdown(s, SD_SEND);
     return 0;
 }
@@ -501,24 +517,82 @@ int p_stdin_fd(void)
     return fd = sp[0];
 }
 
+static int out_hooked;                       /* 标准输出换成了管道(中文 / 控制码转发, 见下面 cp_hook): 照样经它 */
 int p_stdout_write(const void *b, size_t n)
 {
+    if (out_hooked) return fwrite(b, 1, n, stdout) == n ? 0 : -1;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     const char *p = b; DWORD w;
     while (n) { if (!WriteFile(out, p, (DWORD)n, &w, NULL) || !w) return -1; p += w; n -= w; }
     return 0;
 }
 
-/* 程序输出是 UTF-8: 在控制台里跑时把代码页切到 UTF-8, 退出时切回原来的
- * (控制台是和父进程共用的: Win7 的 PowerShell 2.0 在 UTF-8 代码页下一输出中文就崩, 不能留着不还) */
-static UINT cp_saved;
-static void cp_restore(void) { if (cp_saved) SetConsoleOutputCP(cp_saved); }
-static BOOL WINAPI cp_ctrl(DWORD t) { (void)t; cp_restore(); return FALSE; }   /* Ctrl-C 结束时 atexit 不跑: 这里先还 */
+/* 程序输出是 UTF-8。控制台代码页不是 UTF-8 时(Win7 的 cmd / PowerShell 2.0、Win10 的 cmd: 一般是 936)
+ * 不能切代码页: Win7 默认点阵字体显示不了 UTF-8, 切了反而全乱(连窗口里已有的中文都重绘坏)
+ * 做法: 标准输出 / 错误输出是控制台时, 换成管道, 后台线程把 UTF-8 转成 UTF-16 用 WriteConsoleW 写回控制台(跟字体、代码页都无关)
+ * 只对普通命令做: 界面、sh、connect(原样字节)、run(服务) 不动 */
+typedef struct { HANDLE r, con; HANDLE th; int fd; void *st; } cpump_t;
+static cpump_t CP[2];
+
+static DWORD WINAPI cp_pump(LPVOID a)
+{
+    cpump_t *p = a;
+    char b[4100]; int keep = 0; DWORD n; static WCHAR w[2][4200];
+    WCHAR *wb = w[p == &CP[1]];
+    while (ReadFile(p->r, b + keep, (DWORD)(sizeof b - 4 - (size_t)keep), &n, NULL) && n) {
+        if (p->st) { WINMOD.con_write(p->st, p->con, b, n); continue; }   /* Win7: 连 ANSI 控制码一起翻译 */
+        int len = keep + (int)n, cut = len;
+        for (int k = 1; k <= 3 && k <= len; k++) {                /* 末尾不完整的 UTF-8 字留到下次 */
+            unsigned char c = (unsigned char)b[len - k];
+            if ((c & 0xC0) == 0x80) continue;
+            int need = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+            if (need > k) cut = len - k;
+            break;
+        }
+        int wn = MultiByteToWideChar(CP_UTF8, 0, b, cut, wb, 4200);
+        DWORD wr; if (wn > 0) WriteConsoleW(p->con, wb, (DWORD)wn, &wr, NULL);
+        keep = len - cut; memmove(b, b + cut, (size_t)keep);
+    }
+    return 0;
+}
+
+static void cp_flush(void)
+{
+    fflush(stdout); fflush(stderr);
+    for (int k = 0; k < 2; k++) if (CP[k].th) { _close(CP[k].fd); }
+    for (int k = 0; k < 2; k++) if (CP[k].th) { WaitForSingleObject(CP[k].th, 2000); CP[k].th = NULL; }
+}
+
+static void cp_hook(int k, DWORD std, int fd, FILE *f)
+{
+    HANDLE con = GetStdHandle(std); DWORD m; HANDLE r, w;
+    if (!con || con == INVALID_HANDLE_VALUE || !GetConsoleMode(con, &m)) return;
+    /* 换管道时运行库会关掉原来那个控制台句柄: 另开一份控制台输出给转发线程 */
+    con = con_out();
+    if (con == INVALID_HANDLE_VALUE) return;
+    if (!CreatePipe(&r, &w, NULL, 0)) { CloseHandle(con); return; }
+    int wfd = _open_osfhandle((intptr_t)w, _O_BINARY | _O_WRONLY);
+    if (wfd < 0) { CloseHandle(r); CloseHandle(w); return; }
+    fflush(f);
+    if (_dup2(wfd, fd)) { _close(wfd); CloseHandle(r); return; }
+    _close(wfd);
+    setvbuf(f, NULL, _IONBF, 0);
+    CP[k].r = r; CP[k].con = con; CP[k].fd = fd;
+    if (WINMOD.con_write) CP[k].st = calloc(1, WINMOD.con_state_size);
+    if (!k) out_hooked = 1;
+    CP[k].th = CreateThread(NULL, 0, cp_pump, &CP[k], 0, NULL);
+}
 
 char **p_args_utf8(int argc, char **argv)
 {
+    const char *c = argc > 1 ? argv[1] : "";
     UINT cp = GetConsoleOutputCP();
-    if (cp && cp != CP_UTF8 && SetConsoleOutputCP(CP_UTF8)) { cp_saved = cp; atexit(cp_restore); SetConsoleCtrlHandler(cp_ctrl, TRUE); }
+    int legacy = WINMOD.con_write != NULL;               /* Win7: 控制台不认 ANSI、点阵字体: 界面和 sh 也走转发(翻译控制码) */
+    int plain = argc > 1 && strcmp(c, "sh") && strcmp(c, "connect") && strcmp(c, "tui") && strcmp(c, "run") && strcmp(c, "ctl");
+    if (strcmp(c, "run") && strcmp(c, "connect") && strcmp(c, "ctl") && ((legacy) || (cp && cp != CP_UTF8 && plain))) {
+        cp_hook(0, STD_OUTPUT_HANDLE, 1, stdout); cp_hook(1, STD_ERROR_HANDLE, 2, stderr);
+        if (CP[0].th || CP[1].th) atexit(cp_flush);
+    }
     int wn = 0;
     LPWSTR *wa = CommandLineToArgvW(GetCommandLineW(), &wn);
     if (!wa || wn < argc) return argv;
