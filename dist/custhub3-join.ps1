@@ -9,7 +9,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'                    # 不刷进度条(经 ssh 会变成一堆 XML, 还拖慢下载)
 # 提示文字用 UTF-8 的 base64 写: irm … | iex 按 Latin-1 解码脚本, 直接写中文会乱码
 function M($b) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)) }
-try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
+# PowerShell 2.0(Win7 自带)在 UTF-8 代码页下一输出中文就整个崩掉(窗口直接没了): 只在 3.0 起切; custhub.exe 自己会切过去再切回来
+if ($PSVersionTable.PSVersion.Major -ge 3) { try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { } }
 $repo = '__REPO__'
 $base = 'https://github.com/__REPO__/releases'   # 从某台机器的 http://IP:端口 取时, 它发出来的这一行已换成它自己
 if ($env:CUSTHUB_BASE) { $base = $env:CUSTHUB_BASE }

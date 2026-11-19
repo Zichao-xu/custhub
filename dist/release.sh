@@ -33,4 +33,4 @@ ls -l "$O"
 [ $DRY = 1 ] && { echo "(--dry: 没发布)"; exit 0; }
 gh release view "v$V" --repo "$REPO" >/dev/null 2>&1 && { echo "Release v$V 已存在: 先改 VERSION" >&2; exit 1; }
 gh release create "v$V" --repo "$REPO" --title "custhub v$V" --latest --notes "custhub v$V" "$O"/*
-echo "已发布 v$V($REPO)。接入命令(Win7 起的 Windows / Mac / Linux 通用)由界面 n 或 custhub key line 生成: 地址是网里一台可达机器的 http://IP:端口"
+echo "已发布 v$V($REPO)。接入命令(Win7 起的 Windows / Mac / Linux 通用)由界面 n 或 custhub line 生成: 地址是网里一台可达机器的 http://IP:端口"

@@ -509,8 +509,16 @@ int p_stdout_write(const void *b, size_t n)
     return 0;
 }
 
+/* 程序输出是 UTF-8: 在控制台里跑时把代码页切到 UTF-8, 退出时切回原来的
+ * (控制台是和父进程共用的: Win7 的 PowerShell 2.0 在 UTF-8 代码页下一输出中文就崩, 不能留着不还) */
+static UINT cp_saved;
+static void cp_restore(void) { if (cp_saved) SetConsoleOutputCP(cp_saved); }
+static BOOL WINAPI cp_ctrl(DWORD t) { (void)t; cp_restore(); return FALSE; }   /* Ctrl-C 结束时 atexit 不跑: 这里先还 */
+
 char **p_args_utf8(int argc, char **argv)
 {
+    UINT cp = GetConsoleOutputCP();
+    if (cp && cp != CP_UTF8 && SetConsoleOutputCP(CP_UTF8)) { cp_saved = cp; atexit(cp_restore); SetConsoleCtrlHandler(cp_ctrl, TRUE); }
     int wn = 0;
     LPWSTR *wa = CommandLineToArgvW(GetCommandLineW(), &wn);
     if (!wa || wn < argc) return argv;
