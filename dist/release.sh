@@ -24,7 +24,12 @@ ssh-add -L 2>/dev/null | grep -q " custhub-master$" || { echo "主钥匙没解�
 # 没有种子也没有节点(第一次建网): 主公钥就取 agent 里解锁进去的那把
 [ ${#MA[@]} -eq 0 ] && [ -z "$NODE" ] && MA=(--master "$(ssh-add -L | grep " custhub-master$" | head -1 | cut -d" " -f1,2)")
 # 接入脚本、源码也进清单: 每台机器都缓存最新版的全部发布物, 能用 http://IP:端口 发给还没装的机器
-for f in custhub3-join.sh custhub3-join.ps1; do sed "s#__REPO__#$REPO#g" "dist/$f" >"$O/$f"; cp "$O/$f" "$O/custhub3-$V-${f#custhub3-}"; done
+for f in custhub3-join.sh custhub3-join.ps1; do sed "s#__REPO__#$REPO#g" "dist/$f" >"$O/$f"; done
+# Windows 脚本只留 ASCII: Win7 的 PowerShell 2.0 下载脚本按 GBK 解(不认响应头的 charset), 中文注释会吞掉换行、丢掉下一行代码
+#   去掉整行注释和带中文的行尾注释(提示文字本来就是 base64), 再查一遍
+perl -ne 'next if /^\s*#/; s/[ \t]+#[^\x27"\n]*// if /[^\x00-\x7f]/; print' "$O/custhub3-join.ps1" >"$O/j.tmp" && mv "$O/j.tmp" "$O/custhub3-join.ps1"
+LC_ALL=C grep -n '[^ -~	]' "$O/custhub3-join.ps1" && { echo "custhub3-join.ps1 里还有非 ASCII 字符(上面几行), 不发" >&2; exit 1; }
+for f in custhub3-join.sh custhub3-join.ps1; do cp "$O/$f" "$O/custhub3-$V-${f#custhub3-}"; done
 ( cd .. && git ls-files -z mesh | tar --null -T - -czf "mesh/$O/custhub3-$V-src.tar.gz" -s "#^mesh#custhub-$V#" )
 echo "== 签发布清单、出种子"
 "${K[@]}" release "$V" "$O"/custhub3-"$V"-* ${ONLY:+--only "$ONLY"} --out "$O/custhub3.release" ${MA[@]+"${MA[@]}"}
