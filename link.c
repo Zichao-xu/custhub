@@ -444,8 +444,15 @@ int mesh_run(const char *dir)
     G.lfd = G.cfd = -1;
     relay_sync();
     if (G.ctl[0]) {
-        for (int k = 0; k < 40 && (G.cfd = listen_on(G.ctl)) < 0; k++) p_sleep_ms(250);   /* 升级重启时旧进程可能还没让出来 */
-        if (G.cfd < 0) { logf_("控制口 %s 起不来(已有一份在跑?)", G.ctl); return 1; }
+        /* 控制口独占: 拿不到 = 本机已经有一份在跑。升级接班的那份要等上一份让出来(还等不到就清掉残留的旧进程);
+         * 别的情况(服务管理器又拉起一份)直接退出, 退出码 0: 不算失败, 不会被反复拉起 */
+        int succ = rel_successor();
+        for (int k = 0; k < (succ ? 80 : 4) && (G.cfd = listen_on(G.ctl)) < 0; k++) {
+            if (succ && k == 40) { logf_("控制口 %s 还被占着: 清掉残留的旧进程", G.ctl); p_kill_strays(); }
+            p_sleep_ms(250);
+        }
+        if (G.cfd < 0 && !succ) { logf_("本机已经有一份在跑(控制口 %s 占着), 这份退出", G.ctl); exit(0); }
+        if (G.cfd < 0) { logf_("控制口 %s 起不来", G.ctl); return 1; }
         uint8_t r[16]; rnd(r, 16);                      /* 控制口令牌: 每次启动换一个 */
         for (int i = 0; i < 16; i++) snprintf(G.ctl_token + 2 * i, 3, "%02x", r[i]);
         char tp[300]; snprintf(tp, sizeof tp, "%s/ctl.token", G.dir);

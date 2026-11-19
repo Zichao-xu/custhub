@@ -63,6 +63,9 @@ CUSTHUB_SVC_KIND=systemd $M join --seed "$T/seed" --wait 15 >"$T/join2.out" 2>&1
 [ "$($M pub "$T/home/node")" = "$NP" ] && ok "节点钥匙不变" || ng "钥匙变了"
 grep -q "本机已在名单里(n1)" "$T/join2.out" && grep -q "^已接入: 名字 n1$" "$T/join2.out" && ok "已在名单里: 不用再批准, 直接已接入" || ng "再次 join: $(cat "$T/join2.out")"
 
+o=$($M run "$T/home/node" 2>&1); c=$?
+[ $c = 0 ] && grep -q "本机已经有一份在跑" "$T/home/node/mesh.log" && kill -0 "$(cat "$T/home/node/dry/pid")" 2>/dev/null && ok "服务管理器多拉起一份: 控制口占着, 这份退出(退出码 0), 原来那份照跑" || ng "第二份: 退出码 $c $(tail -2 "$T/home/node/mesh.log")"
+
 echo "== 4b 命令进 PATH(链接放到 CUSTHUB_PATH_DIR, 不碰系统)"
 CUSTHUB_PATH_DIR=$T/bin CUSTHUB_SVC_KIND=systemd $M join --seed "$T/seed" --wait 5 >"$T/join3.out" 2>&1
 [ "$(readlink "$T/bin/custhub")" = "$T/home/custhub" ] && "$T/bin/custhub" version | grep -q "^custhub " && grep -q "命令: custhub → $T/bin/custhub" "$T/join3.out" && ok "join 后 custhub 在 PATH 目录里(链到安装目录那份), 能直接跑" || ng "PATH: $(ls -l "$T/bin" 2>&1); $(grep 命令 "$T/join3.out")"

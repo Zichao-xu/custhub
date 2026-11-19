@@ -339,6 +339,8 @@ static void swap_in(const char *pkg, const char *ver)
         remove(nw); bad_add(ver); logf_("新版 %s 跑不起来或报的版本不对(%.60s), 不升", ver, out); return;
     }
     remove(old);
+    FILE *ex = fopen(old, "rb");                         /* 删不掉: 还被别的进程占着(Windows 上残留的旧进程); 运行中的程序能改名, 挪开它 */
+    if (ex) { fclose(ex); char st[460]; snprintf(st, sizeof st, "%s.%lld", old, (long long)wall_ms()); if (!p_replace(old, st)) logf_("旧版 %s 还被占着, 挪到 %s", old, st); }
     if (p_replace(cur, old)) { remove(nw); logf_("换下旧版失败"); return; }
     if (p_replace(nw, cur)) { p_replace(old, cur); logf_("换上新版失败"); return; }
     pending_write(CH_VERSION, ver, 0);
@@ -423,6 +425,12 @@ void rel_saw(const char *ver)                            /* 位置记录里看�
         int64_t soon = now_ms() + 3000;
         if (next_check > soon) next_check = soon;
     }
+}
+
+int rel_successor(void)                                  /* 本进程是不是升级后接班试用的那份(启动时用: 要等上一份让出端口) */
+{
+    char from[32], to[32]; int tries;
+    return pending_read(from, to, &tries) && !strcmp(to, CH_VERSION);
 }
 
 void rel_start(void)

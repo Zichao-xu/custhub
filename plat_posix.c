@@ -904,6 +904,8 @@ void p_machine(char *os, size_t ocap, char *model, size_t mcap)
 #endif
 }
 
+void p_kill_strays(void) { }
+
 int p_rmtree(const char *path)
 {
     struct stat st;

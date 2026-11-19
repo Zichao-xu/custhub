@@ -7,6 +7,7 @@
 #include <shellapi.h>
 #include <aclapi.h>
 #include <sddl.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,7 +113,7 @@ int p_listen(const char *host, int port)
     if (getaddrinfo(host, ps, &hints, &ai) || !ai) return -1;
     SOCKET s = socket(ai->ai_family, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) { freeaddrinfo(ai); return -1; }
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
+    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&one, sizeof one);   /* Windows 的 SO_REUSEADDR 会让第二个进程抢绑同一个口: 要独占 */
     if (bind(s, ai->ai_addr, (int)ai->ai_addrlen) || listen(s, 64)) { freeaddrinfo(ai); closesocket(s); return -1; }
     freeaddrinfo(ai);
     p_nb((int)s);
@@ -1051,6 +1052,25 @@ void p_machine(char *os, size_t ocap, char *model, size_t mcap)
     reg_str(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", L"SystemManufacturer", ven, sizeof ven);
     reg_str(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", L"SystemProductName", mod, sizeof mod);
     snprintf(model, mcap, "%s%s%s", ven, ven[0] && mod[0] ? " " : "", mod);
+}
+
+void p_kill_strays(void)
+{
+    char dir[MAX_PATH + 32]; snprintf(dir, sizeof dir, "%s\\", p_install_dir());
+    size_t dl = strlen(dir);
+    DWORD me = GetCurrentProcessId();
+    HANDLE sn = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (sn == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32 pe; pe.dwSize = sizeof pe;
+    for (BOOL ok = Process32First(sn, &pe); ok; ok = Process32Next(sn, &pe)) {
+        if (pe.th32ProcessID == me || _strnicmp(pe.szExeFile, "custhub", 7)) continue;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+        if (!h) continue;
+        char path[MAX_PATH * 2]; DWORD n = sizeof path;
+        if (QueryFullProcessImageNameA(h, 0, path, &n) && !_strnicmp(path, dir, dl)) TerminateProcess(h, 1);
+        CloseHandle(h);
+    }
+    CloseHandle(sn);
 }
 
 int p_rmtree(const char *path)

@@ -240,6 +240,7 @@ int  cmd_run(int argc, char **argv);
 void path_ensure(void);
 int  cmd_user(int argc, char **argv);
 int  cmd_tui(const char *dir);
+int  rel_successor(void);                                 /* rel.c: 本进程是升级后接班试用的那份 */
 const char *my_info(void);                               /* disc.c: 本机 平台|机器名|系统|机型 */                           /* tui.c: custhub 不带参数的终端界面 */                     /* custhub user add|del|ls */                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
 int  cmd_remove3(int argc, char **argv);
 const char *node_default(void);                          /* 默认节点目录(用户模式装过就用它) */
