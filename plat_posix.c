@@ -1,0 +1,723 @@
+/* 平台模块: POSIX(Linux / OpenWrt / macOS)。只有这里和 plat_win.c 能 include 系统头文件 */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700                 /* posix_openpt / grantpt / ptsname(glibc 要它) */
+#endif
+#include "plat.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <time.h>
+#include <unistd.h>
+#include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <termios.h>
+#include <pwd.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>
+
+static int would(int e) { return e == EAGAIN || e == EWOULDBLOCK || e == EINTR; }
+
+int p_init(void) { signal(SIGPIPE, SIG_IGN); return 0; }
+
+int p_poll(pfd_t *p, int n, int ms)
+{
+    static struct pollfd q[1024];
+    if (n > (int)(sizeof q / sizeof q[0])) n = (int)(sizeof q / sizeof q[0]);
+    for (int i = 0; i < n; i++) {
+        q[i].fd = p[i].fd; q[i].revents = 0;
+        q[i].events = (short)((p[i].ev & P_IN ? POLLIN : 0) | (p[i].ev & P_OUT ? POLLOUT : 0));
+    }
+    int r = poll(q, (nfds_t)n, ms);
+    if (r < 0) return errno == EINTR ? 0 : -1;
+    for (int i = 0; i < n; i++)
+        p[i].rev = (short)((q[i].revents & POLLIN ? P_IN : 0) | (q[i].revents & POLLOUT ? P_OUT : 0) |
+                           (q[i].revents & (POLLHUP | POLLERR | POLLNVAL) ? P_HUP : 0));
+    return r;
+}
+
+/* 一律 read / write: socket、伪终端、标准输入输出都能用(SIGPIPE 已忽略; SO_NOSIGPIPE 兜底 macOS) */
+long p_recv(int fd, void *b, size_t n)
+{
+    ssize_t r = read(fd, b, n);
+    if (r >= 0) return (long)r;
+    if (errno == EIO) return 0;                         /* 伪终端: shell 那头全关了 = 读到头 */
+    return would(errno) ? P_AGAIN : P_FAIL;
+}
+
+long p_send(int fd, const void *b, size_t n)
+{
+    ssize_t r = write(fd, b, n);
+    if (r >= 0) return (long)r;
+    return would(errno) ? P_AGAIN : P_FAIL;
+}
+
+void p_close(int fd) { close(fd); }
+void p_shut_wr(int fd) { shutdown(fd, SHUT_WR); }
+
+void p_nb(int fd)
+{
+    int one = 1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+#ifdef SO_NOSIGPIPE
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+}
+
+void p_block(int fd) { fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK); }
+int p_lasterr(void) { return errno; }
+const char *p_strerr(int e) { return strerror(e); }
+
+int p_dial(const char *host, int port, int nb, char *why, size_t wcap)
+{
+    struct addrinfo hints, *ai = NULL;
+    char ps[8];
+    memset(&hints, 0, sizeof hints);
+    hints.ai_socktype = SOCK_STREAM;
+    snprintf(ps, sizeof ps, "%d", port);
+    if (getaddrinfo(host, ps, &hints, &ai) || !ai) { snprintf(why, wcap, "解析不了 %s", host); return -1; }
+    int fd = socket(ai->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { snprintf(why, wcap, "%s", strerror(errno)); freeaddrinfo(ai); return -1; }
+    if (nb) p_nb(fd);
+    int r = connect(fd, ai->ai_addr, ai->ai_addrlen);
+    freeaddrinfo(ai);
+    if (r < 0 && !(nb && errno == EINPROGRESS)) { snprintf(why, wcap, "%s", strerror(errno)); close(fd); return -1; }
+    return fd;
+}
+
+int p_dial_result(int fd)
+{
+    int err = 0; socklen_t l = sizeof err;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l)) return errno;
+    return err;
+}
+
+int p_listen(const char *host, int port)
+{
+    struct addrinfo hints, *ai = NULL;
+    char ps[8]; int one = 1;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_PASSIVE;
+    snprintf(ps, sizeof ps, "%d", port);
+    if (getaddrinfo(host, ps, &hints, &ai) || !ai) return -1;
+    int fd = socket(ai->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { freeaddrinfo(ai); return -1; }
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (bind(fd, ai->ai_addr, ai->ai_addrlen) || listen(fd, 64)) { freeaddrinfo(ai); close(fd); return -1; }
+    freeaddrinfo(ai);
+    p_nb(fd);
+    return fd;
+}
+
+int p_accept(int lfd, char *peer, size_t pcap)
+{
+    struct sockaddr_storage sa; socklen_t l = sizeof sa;
+    int fd = accept(lfd, (struct sockaddr *)&sa, &l);
+    if (fd < 0) return -1;
+    char h[64] = "?"; int port = 0;
+    if (sa.ss_family == AF_INET) { struct sockaddr_in *s4 = (void *)&sa; inet_ntop(AF_INET, &s4->sin_addr, h, sizeof h); port = ntohs(s4->sin_port); }
+    else if (sa.ss_family == AF_INET6) { struct sockaddr_in6 *s6 = (void *)&sa; inet_ntop(AF_INET6, &s6->sin6_addr, h, sizeof h); port = ntohs(s6->sin6_port); }
+    if (peer) snprintf(peer, pcap, "%s:%d", h, port);
+    p_nb(fd);
+    return fd;
+}
+
+void p_open_firewall(int port)
+{
+#ifdef __linux__
+    char cmd[300];
+    snprintf(cmd, sizeof cmd, "command -v iptables >/dev/null 2>&1 && { iptables -C INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null"
+             " || iptables -I INPUT 1 -p tcp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
+    if (system(cmd)) { /* 没有 iptables 或没权限: 不影响 */ }
+#else
+    (void)port;
+#endif
+}
+
+int64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+int64_t wall_ms(void) { struct timeval tv; gettimeofday(&tv, NULL); return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000; }
+
+void rnd(uint8_t *out, size_t n)
+{
+    int fd = open("/dev/urandom", O_RDONLY);
+    size_t got = 0;
+    while (fd >= 0 && got < n) { ssize_t r = read(fd, out + got, n - got); if (r <= 0) break; got += (size_t)r; }
+    if (fd >= 0) close(fd);
+    if (got != n) { fprintf(stderr, "取不到随机数\n"); abort(); }
+}
+
+int p_replace(const char *from, const char *to) { return rename(from, to) ? -1 : 0; }
+
+int p_pump_stdio(int fd)
+{
+    char b[16384];
+    struct pollfd p[2] = { { 0, POLLIN, 0 }, { fd, POLLIN, 0 } };
+    for (;;) {
+        if (poll(p, 2, -1) < 0) { if (errno == EINTR) continue; return 1; }
+        if (p[0].revents) {
+            ssize_t r = read(0, b, sizeof b);
+            if (r <= 0) { shutdown(fd, SHUT_WR); p[0].fd = -1; }
+            else for (ssize_t o = 0; o < r;) { ssize_t w = send(fd, b + o, (size_t)(r - o), 0); if (w <= 0) return 1; o += w; }
+        }
+        if (p[1].revents) {
+            ssize_t r = recv(fd, b, sizeof b, 0);
+            if (r <= 0) return 0;
+            for (ssize_t o = 0; o < r;) { ssize_t w = write(1, b + o, (size_t)(r - o)); if (w <= 0) return 1; o += w; }
+        }
+    }
+}
+
+long p_agent_call(const uint8_t *req, size_t n, uint8_t *resp, size_t cap, char *why, size_t wcap)
+{
+    const char *path = getenv("SSH_AUTH_SOCK");
+    struct sockaddr_un a;
+    if (!path || !*path || strlen(path) >= sizeof a.sun_path) { snprintf(why, wcap, "没有 ssh-agent(SSH_AUTH_SOCK 没设)"); return -1; }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { snprintf(why, wcap, "%s", strerror(errno)); return -1; }
+    memset(&a, 0, sizeof a); a.sun_family = AF_UNIX; memcpy(a.sun_path, path, strlen(path));
+    if (connect(fd, (struct sockaddr *)&a, sizeof a)) { snprintf(why, wcap, "连不上 ssh-agent: %s", strerror(errno)); close(fd); return -1; }
+    for (size_t o = 0; o < n;) { ssize_t w = write(fd, req + o, n - o); if (w <= 0) { snprintf(why, wcap, "写 ssh-agent 失败"); close(fd); return -1; } o += (size_t)w; }
+    uint8_t h[4]; size_t got = 0;
+    while (got < 4) { ssize_t r = read(fd, h + got, 4 - got); if (r <= 0) break; got += (size_t)r; }
+    size_t len = got == 4 ? (size_t)h[0] << 24 | (size_t)h[1] << 16 | (size_t)h[2] << 8 | h[3] : 0;
+    if (got != 4 || len == 0 || len > cap) { snprintf(why, wcap, "ssh-agent 回答不对"); close(fd); return -1; }
+    for (got = 0; got < len;) { ssize_t r = read(fd, resp + got, len - got); if (r <= 0) { snprintf(why, wcap, "ssh-agent 回答不完整"); close(fd); return -1; } got += (size_t)r; }
+    close(fd);
+    return (long)len;
+}
+
+/* ---------- 伪终端 ---------- */
+int p_pair(int fd[2])
+{
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fd)) return -1;
+    for (int i = 0; i < 2; i++) { fcntl(fd[i], F_SETFD, FD_CLOEXEC); fcntl(fd[i], F_SETFL, fcntl(fd[i], F_GETFL) | O_NONBLOCK); }
+    return 0;
+}
+
+#define MAXPTY 32
+static struct { int used, mfd, exited, code; pid_t pid; } PT[MAXPTY];
+
+static void reap(int h)
+{
+    int st;
+    if (PT[h].exited || !PT[h].pid) return;
+    if (waitpid(PT[h].pid, &st, WNOHANG) == PT[h].pid) {
+        PT[h].exited = 1;
+        PT[h].code = WIFEXITED(st) ? WEXITSTATUS(st) : WIFSIGNALED(st) ? 128 + WTERMSIG(st) : 255;
+    }
+}
+
+int p_pty_open(const char *cmd, int rows, int cols, const char *term, int *fd, char *why, size_t wcap)
+{
+    int h = -1;
+    for (int i = 0; i < MAXPTY; i++) {
+        if (PT[i].used == 2) { reap(i); if (PT[i].exited) PT[i].used = 0; }   /* 关过但还没收尸的 */
+        if (!PT[i].used && h < 0) h = i;
+    }
+    if (h < 0) { snprintf(why, wcap, "shell 太多了"); return -1; }
+    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0 || grantpt(m) || unlockpt(m)) { snprintf(why, wcap, "开不了伪终端: %s", strerror(errno)); if (m >= 0) close(m); return -1; }
+    const char *sn = ptsname(m);
+    char sname[128]; snprintf(sname, sizeof sname, "%s", sn ? sn : "");
+    struct winsize ws; memset(&ws, 0, sizeof ws); ws.ws_row = (unsigned short)rows; ws.ws_col = (unsigned short)cols;
+    /* 终端设置在 fork 前由这边设好: 输入可能在 shell 起来之前就到了, 不能让它先按默认设置回显 */
+    int s0 = open(sname, O_RDWR | O_NOCTTY);
+    if (s0 < 0) { snprintf(why, wcap, "开不了伪终端从端: %s", strerror(errno)); close(m); return -1; }
+    ioctl(s0, TIOCSWINSZ, &ws);
+    if (cmd) {                                          /* 跑命令: 不回显输入、输出不转换换行, 对脚本友好(输出逐字节原样) */
+        struct termios t;
+        if (!tcgetattr(s0, &t)) { t.c_lflag &= ~(unsigned)(ECHO | ECHONL | ECHOCTL); t.c_oflag &= ~(unsigned)OPOST; tcsetattr(s0, TCSANOW, &t); }
+    }
+    pid_t pid = fork();
+    if (pid < 0) { snprintf(why, wcap, "fork 失败: %s", strerror(errno)); close(s0); close(m); return -1; }
+    if (pid == 0) {
+        setsid();
+        int s = open(sname, O_RDWR);
+        if (s < 0) _exit(127);
+#ifdef TIOCSCTTY
+        ioctl(s, TIOCSCTTY, 0);
+#endif
+        dup2(s, 0); dup2(s, 1); dup2(s, 2);
+        for (int f = 3; f < 1024; f++) close(f);
+        /* 信号恢复成默认、清空屏蔽字(和 sshd 一样): 守护进程若是从非交互 shell 放到后台起的, SIGINT 等会被设成忽略,
+         * 一路传给 shell, Ctrl-C 之后 shell 就不收拾前台命令了 */
+        for (int sg = 1; sg < 32; sg++) if (sg != SIGKILL && sg != SIGSTOP) signal(sg, SIG_DFL);
+        sigset_t none; sigemptyset(&none); sigprocmask(SIG_SETMASK, &none, NULL);
+        struct passwd *pw = getpwuid(getuid());
+        const char *sh = pw && pw->pw_shell && *pw->pw_shell ? pw->pw_shell : "/bin/sh";
+        if (pw) { setenv("HOME", pw->pw_dir, 1); setenv("USER", pw->pw_name, 1); setenv("LOGNAME", pw->pw_name, 1); }
+        setenv("SHELL", sh, 1);
+        setenv("TERM", term && *term ? term : "xterm-256color", 1);
+        if (cmd) { execl("/bin/sh", "sh", "-c", cmd, (char *)NULL); _exit(127); }
+        if (pw && pw->pw_dir && chdir(pw->pw_dir)) { /* 进不了家目录就留在原地 */ }
+        const char *b = strrchr(sh, '/');
+        char a0[64]; snprintf(a0, sizeof a0, "-%s", b ? b + 1 : sh);   /* 登录 shell */
+        execl(sh, a0, (char *)NULL);
+        execl("/bin/sh", "-sh", (char *)NULL);
+        _exit(127);
+    }
+    close(s0);
+    fcntl(m, F_SETFD, FD_CLOEXEC); fcntl(m, F_SETFL, fcntl(m, F_GETFL) | O_NONBLOCK);
+    PT[h].used = 1; PT[h].mfd = m; PT[h].pid = pid; PT[h].exited = 0; PT[h].code = 0;
+    *fd = m;
+    return h;
+}
+
+void p_pty_resize(int h, int rows, int cols)
+{
+    if (h < 0 || h >= MAXPTY || PT[h].used != 1) return;
+    struct winsize ws; memset(&ws, 0, sizeof ws); ws.ws_row = (unsigned short)rows; ws.ws_col = (unsigned short)cols;
+    ioctl(PT[h].mfd, TIOCSWINSZ, &ws);
+}
+
+int p_pty_exit(int h, int *code)
+{
+    if (h < 0 || h >= MAXPTY || !PT[h].used) return 1;
+    reap(h);
+    if (PT[h].exited) *code = PT[h].code;
+    return PT[h].exited;
+}
+
+void p_pty_close(int h)
+{
+    if (h < 0 || h >= MAXPTY || PT[h].used != 1) return;
+    reap(h);
+    if (!PT[h].exited) kill(-PT[h].pid, SIGHUP);
+    close(PT[h].mfd);
+    reap(h);
+    PT[h].used = PT[h].exited ? 0 : 2;                 /* 2 = 等下次收尸 */
+}
+
+/* ---------- 本地终端 ---------- */
+static struct termios saved; static int raw_on;
+static volatile sig_atomic_t winch;
+static void on_winch(int s) { (void)s; winch = 1; }
+
+int p_tty_raw(int on)
+{
+    if (!isatty(0)) return 0;
+    if (on && !raw_on) {
+        struct termios t;
+        if (tcgetattr(0, &saved)) return 0;
+        t = saved;
+        t.c_iflag &= ~(unsigned)(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+        t.c_oflag &= ~(unsigned)OPOST;
+        t.c_lflag &= ~(unsigned)(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+        t.c_cflag &= ~(unsigned)(CSIZE | PARENB); t.c_cflag |= CS8;
+        t.c_cc[VMIN] = 1; t.c_cc[VTIME] = 0;
+        tcsetattr(0, TCSANOW, &t);
+        raw_on = 1;
+        signal(SIGWINCH, on_winch);
+    } else if (!on && raw_on) { tcsetattr(0, TCSANOW, &saved); raw_on = 0; }
+    return 1;
+}
+
+int p_tty_size(int *rows, int *cols)
+{
+    struct winsize ws;
+    if (ioctl(0, TIOCGWINSZ, &ws) || !ws.ws_row || !ws.ws_col) return -1;
+    *rows = ws.ws_row; *cols = ws.ws_col;
+    return 0;
+}
+
+int p_tty_resized(void) { int w = winch; winch = 0; return w; }
+
+void p_pty_eof(int h)
+{
+    if (h < 0 || h >= MAXPTY || PT[h].used != 1) return;
+    char eot = 4;                                       /* 伪终端没法半关: 给一个 ^D(行首时就是"输入到头") */
+    if (write(PT[h].mfd, &eot, 1) < 0) { /* 写不进就算了 */ }
+}
+
+int p_stdin_fd(void) { return 0; }
+
+int p_stdout_write(const void *b, size_t n)
+{
+    const char *p = b;
+    while (n) {
+        ssize_t w = write(1, p, n);
+        if (w < 0 && (errno == EAGAIN || errno == EINTR)) { struct pollfd q = { 1, POLLOUT, 0 }; poll(&q, 1, 1000); continue; }
+        if (w <= 0) return -1;
+        p += w; n -= (size_t)w;
+    }
+    return 0;
+}
+
+char **p_args_utf8(int argc, char **argv) { (void)argc; return argv; }
+
+/* ---------- UDP ---------- */
+int p_udp_open(void)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC); fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    return fd;
+}
+
+int p_udp_sendto(int fd, const char *host, int port, const void *b, size_t n)
+{
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons((unsigned short)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) return -1;
+    return sendto(fd, b, n, 0, (struct sockaddr *)&a, sizeof a) == (ssize_t)n ? 0 : -1;
+}
+
+long p_udp_recv(int fd, void *b, size_t cap)
+{
+    ssize_t r = recvfrom(fd, b, cap, 0, NULL, NULL);
+    if (r >= 0) return (long)r;
+    return would(errno) ? P_AGAIN : P_FAIL;
+}
+
+int p_local_ip(const char *peer_host, char *out, size_t cap)
+{
+    struct sockaddr_in a; socklen_t l = sizeof a;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons(9);
+    if (inet_pton(AF_INET, peer_host, &a.sin_addr) != 1 || connect(fd, (struct sockaddr *)&a, sizeof a) ||
+        getsockname(fd, (struct sockaddr *)&a, &l) || !inet_ntop(AF_INET, &a.sin_addr, out, (socklen_t)cap)) { close(fd); return -1; }
+    close(fd);
+    return 0;
+}
+
+/* ---------- 自升级 ---------- */
+int p_self_path(char *out, size_t cap)
+{
+#ifdef __APPLE__
+    extern int _NSGetExecutablePath(char *, uint32_t *);
+    char tmp[1024]; uint32_t n = sizeof tmp;
+    if (_NSGetExecutablePath(tmp, &n) != 0 || !realpath(tmp, out)) return -1;
+    (void)cap;
+    return 0;
+#else
+    ssize_t n = readlink("/proc/self/exe", out, cap - 1);
+    if (n <= 0) return -1;
+    out[n] = 0;
+    return 0;
+#endif
+}
+
+int p_run(const char *const *argv, char *out, size_t cap, int timeout_s)
+{
+    int fd[2];
+    if (pipe(fd)) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(fd[0]); close(fd[1]); return -1; }
+    if (pid == 0) {
+        close(fd[0]); dup2(fd[1], 1); dup2(fd[1], 2);
+        int nul = open("/dev/null", O_RDONLY); if (nul >= 0) dup2(nul, 0);
+        for (int f = 3; f < 1024; f++) close(f);
+        execv(argv[0], (char *const *)argv); _exit(127);
+    }
+    close(fd[1]);
+    size_t n = 0; int timed = 0;
+    time_t end = time(NULL) + timeout_s;
+    for (;;) {
+        int left = (int)(end - time(NULL));
+        if (left <= 0) { timed = 1; break; }
+        struct pollfd q = { fd[0], POLLIN, 0 };
+        int r = poll(&q, 1, left * 1000);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) { timed = 1; break; }
+        char tmp[4096];
+        ssize_t k = read(fd[0], tmp, sizeof tmp);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) break;
+        if (out && n + 1 < cap) { size_t c = (size_t)k < cap - 1 - n ? (size_t)k : cap - 1 - n; memcpy(out + n, tmp, c); n += c; }
+    }
+    close(fd[0]);
+    if (out) out[n] = 0;
+    if (timed) kill(pid, SIGKILL);
+    int st;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (timed) return -2;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+void p_make_exec(const char *path) { chmod(path, 0755); }
+
+void p_exec_self(const char *exe, const char *const *argv) { execv(exe, (char *const *)argv); }
+
+#define MAXFETCH 8
+static pid_t FP[MAXFETCH];
+
+int p_fetch_start(const char *url, const char *out)
+{
+    int h = -1;
+    for (int i = 0; i < MAXFETCH && h < 0; i++) if (!FP[i]) h = i;
+    if (h < 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {                                     /* 依次试系统里有的下载工具, 有一个成功就算成功 */
+        int nul = open("/dev/null", O_RDWR); if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
+        for (int f = 3; f < 1024; f++) close(f);
+        signal(SIGPIPE, SIG_DFL);
+        const char *t[3][10] = {
+            { "curl", "-fsSL", "--connect-timeout", "15", "--max-time", "600", "-o", out, url, NULL },
+            { "wget", "-q", "-T", "30", "-O", out, url, NULL },
+            { "uclient-fetch", "-q", "-T", "30", "-O", out, url, NULL } };
+        for (int k = 0; k < 3; k++) {
+            pid_t c = fork();
+            if (c == 0) { execvp(t[k][0], (char *const *)t[k]); _exit(127); }
+            int st = 0;
+            if (c > 0 && waitpid(c, &st, 0) == c && WIFEXITED(st) && WEXITSTATUS(st) == 0) _exit(0);
+            unlink(out);
+        }
+        _exit(1);
+    }
+    FP[h] = pid;
+    return h;
+}
+
+int p_fetch_poll(int h)
+{
+    if (h < 0 || h >= MAXFETCH || !FP[h]) return -1;
+    int st;
+    pid_t r = waitpid(FP[h], &st, WNOHANG);
+    if (r == 0) return 0;
+    FP[h] = 0;
+    return r > 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 1 : -1;
+}
+
+void p_fetch_kill(int h)
+{
+    if (h < 0 || h >= MAXFETCH || !FP[h]) return;
+    kill(FP[h], SIGKILL); waitpid(FP[h], NULL, 0); FP[h] = 0;
+}
+
+/* ---------- 部署 ---------- */
+static int is_file(const char *p) { struct stat st; return stat(p, &st) == 0 && S_ISREG(st.st_mode); }
+static int is_dir(const char *p) { struct stat st; return stat(p, &st) == 0 && S_ISDIR(st.st_mode); }
+
+static int user_mode;
+void p_set_user_mode(int on) { user_mode = on; }
+int p_user_mode(void) { return user_mode; }
+
+const char *p_user_dir(void)
+{
+    static char d[1024];
+    const char *h = getenv("HOME");
+    if (!h || !*h) { struct passwd *pw = getpwuid(getuid()); h = pw ? pw->pw_dir : "/tmp"; }
+    snprintf(d, sizeof d, "%s/.custhub", h);
+    return d;
+}
+
+const char *p_install_dir(void)
+{
+    const char *e = getenv("CUSTHUB_HOME");
+    if (e && *e) return e;
+    if (user_mode) return p_user_dir();
+#ifdef __APPLE__
+    return "/Library/Application Support/custhub";
+#else
+    return is_file("/etc/openwrt_release") ? "/usr/lib/custhub" : "/opt/custhub";
+#endif
+}
+
+int p_is_admin(void) { return geteuid() == 0; }
+int p_mkdir(const char *path) { return mkdir(path, 0700) == 0 || errno == EEXIST ? 0 : -1; }
+void p_private_files(void) { umask(077); }
+int p_private_dir(const char *path) { return chmod(path, 0700) ? -1 : 0; }
+void p_hostname(char *out, size_t cap) { if (gethostname(out, cap)) snprintf(out, cap, "host"); out[cap - 1] = 0; }
+void p_sleep_ms(int ms) { poll(NULL, 0, ms); }
+
+const char *p_service_kind(void)
+{
+    const char *k = getenv("CUSTHUB_SVC_KIND");
+    if (k && *k) return k;
+    if (user_mode) return is_dir("/Library/LaunchAgents") ? "launchd-user" : is_file("/bin/systemctl") || is_file("/usr/bin/systemctl") ? "systemd-user" : "";
+    if (is_dir("/Library/LaunchDaemons")) return "launchd";
+    if (is_file("/etc/openwrt_release")) return "procd";
+    if (is_file("/bin/systemctl") || is_file("/usr/bin/systemctl")) return "systemd";
+    return "";
+}
+
+#define SD_UNIT "/etc/systemd/system/custhub.service"
+#define PROCD   "/etc/init.d/custhub"
+#define PLIST   "/Library/LaunchDaemons/com.custhub.run.plist"
+
+static int dry(void) { return getenv("CUSTHUB_SVC_DRY") != NULL; }
+
+static int run_q(const char *const *av)                /* 跑系统命令; 演练时只记下来 */
+{
+    if (dry()) return 0;
+    char out[512];
+    return p_run(av, out, sizeof out, 60);
+}
+
+static int put_file(const char *dir, const char *path, const char *text, int exec)
+{
+    char p[1200];
+    if (dry()) {                                        /* 演练: 写到 dir/dry/<文件名> */
+        const char *b = strrchr(path, '/');
+        snprintf(p, sizeof p, "%s/dry", dir); p_mkdir(p);
+        snprintf(p, sizeof p, "%s/dry/%s", dir, b ? b + 1 : path);
+    } else snprintf(p, sizeof p, "%s", path);
+    FILE *f = fopen(p, "w");
+    if (!f) return -1;
+    int ok = fputs(text, f) >= 0;
+    ok = fclose(f) == 0 && ok;
+    if (exec) chmod(p, 0755);
+    return ok ? 0 : -1;
+}
+
+int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
+{
+    const char *k = p_service_kind();
+    static char t[4096];
+    if (!strcmp(k, "systemd")) {
+        snprintf(t, sizeof t, "[Unit]\nDescription=custhub\nAfter=network-online.target\nWants=network-online.target\n\n"
+                 "[Service]\nExecStart=\"%s\" run \"%s\"\nRestart=always\nRestartSec=5\nKillMode=process\n\n"
+                 "[Install]\nWantedBy=multi-user.target\n", exe, dir);
+        if (put_file(dir, SD_UNIT, t, 0)) { snprintf(why, wcap, "写不了 %s", SD_UNIT); return -1; }
+        const char *a[] = { "systemctl", "daemon-reload", NULL }, *b[] = { "systemctl", "enable", "custhub", NULL }, *c[] = { "systemctl", "restart", "custhub", NULL };
+        run_q(a); run_q(b);
+        if (run_q(c)) { snprintf(why, wcap, "systemctl restart custhub 失败"); return -1; }
+    } else if (!strcmp(k, "procd")) {
+        snprintf(t, sizeof t, "#!/bin/sh /etc/rc.common\n# custhub: 开机起, 挂了 procd 拉起\nSTART=99\nUSE_PROCD=1\n\n"
+                 "start_service() {\n\tprocd_open_instance\n\tprocd_set_param command \"%s\" run \"%s\"\n"
+                 "\tprocd_set_param respawn 3600 5 0\n\tprocd_close_instance\n}\n", exe, dir);
+        if (put_file(dir, PROCD, t, 1)) { snprintf(why, wcap, "写不了 %s", PROCD); return -1; }
+        const char *a[] = { PROCD, "enable", NULL }, *b[] = { PROCD, "restart", NULL };
+        run_q(a);
+        if (run_q(b)) { snprintf(why, wcap, "%s restart 失败", PROCD); return -1; }
+    } else if (!strcmp(k, "launchd")) {
+        snprintf(t, sizeof t, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                 "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                 "<plist version=\"1.0\"><dict>\n<key>Label</key><string>com.custhub.run</string>\n"
+                 "<key>ProgramArguments</key><array><string>%s</string><string>run</string><string>%s</string></array>\n"
+                 "<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/>\n<key>ThrottleInterval</key><integer>5</integer>\n"
+                 "</dict></plist>\n", exe, dir);
+        if (put_file(dir, PLIST, t, 0)) { snprintf(why, wcap, "写不了 %s", PLIST); return -1; }
+        const char *a[] = { "launchctl", "bootout", "system/com.custhub.run", NULL }, *b[] = { "launchctl", "bootstrap", "system", PLIST, NULL };
+        run_q(a);
+        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap 失败"); return -1; }
+    } else if (!strcmp(k, "launchd-user")) {            /* 用户模式(Mac): 自己账号的 LaunchAgent */
+        char pl[1100], dom[40]; snprintf(pl, sizeof pl, "%s/Library/LaunchAgents/com.custhub.run.plist", getenv("HOME") ? getenv("HOME") : "");
+        snprintf(dom, sizeof dom, "gui/%d", (int)getuid());
+        snprintf(t, sizeof t, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                 "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                 "<plist version=\"1.0\"><dict>\n<key>Label</key><string>com.custhub.run</string>\n"
+                 "<key>ProgramArguments</key><array><string>%s</string><string>run</string><string>%s</string></array>\n"
+                 "<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><true/>\n<key>ThrottleInterval</key><integer>5</integer>\n"
+                 "</dict></plist>\n", exe, dir);
+        if (put_file(dir, pl, t, 0)) { snprintf(why, wcap, "写不了 %s", pl); return -1; }
+        char svc[60]; snprintf(svc, sizeof svc, "%s/com.custhub.run", dom);
+        const char *a[] = { "launchctl", "bootout", svc, NULL }, *b[] = { "launchctl", "bootstrap", dom, pl, NULL };
+        run_q(a);
+        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap %s 失败", dom); return -1; }
+    } else if (!strcmp(k, "systemd-user")) {            /* 用户模式(Linux): systemd --user */
+        char u[1100]; snprintf(u, sizeof u, "%s/.config/systemd/user/custhub.service", getenv("HOME") ? getenv("HOME") : "");
+        if (!dry()) { char d1[1100]; snprintf(d1, sizeof d1, "%s/.config", getenv("HOME")); mkdir(d1, 0755);
+                      snprintf(d1, sizeof d1, "%s/.config/systemd", getenv("HOME")); mkdir(d1, 0755);
+                      snprintf(d1, sizeof d1, "%s/.config/systemd/user", getenv("HOME")); mkdir(d1, 0755); }
+        snprintf(t, sizeof t, "[Unit]\nDescription=custhub(用户模式)\n\n[Service]\nExecStart=\"%s\" run \"%s\"\nRestart=always\nRestartSec=5\n\n"
+                 "[Install]\nWantedBy=default.target\n", exe, dir);
+        if (put_file(dir, u, t, 0)) { snprintf(why, wcap, "写不了 %s", u); return -1; }
+        const char *a[] = { "systemctl", "--user", "daemon-reload", NULL }, *b[] = { "systemctl", "--user", "enable", "custhub", NULL },
+                   *c[] = { "systemctl", "--user", "restart", "custhub", NULL };
+        run_q(a); run_q(b);
+        if (run_q(c)) { snprintf(why, wcap, "systemctl --user restart custhub 失败"); return -1; }
+    } else { snprintf(why, wcap, "认不出这台机器的服务管理方式(systemd / procd / launchd)"); return -1; }
+    if (dry()) {                                        /* 演练: 不碰系统, 直接在后台起 */
+        pid_t pid = fork();
+        if (pid == 0) {
+            setsid();
+            int nul = open("/dev/null", O_RDWR); if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
+            for (int f = 3; f < 1024; f++) close(f);
+            execl(exe, exe, "run", dir, (char *)NULL); _exit(127);
+        }
+        char p[1200]; snprintf(p, sizeof p, "%s/dry/pid", dir);
+        FILE *f = fopen(p, "w"); if (f) { fprintf(f, "%d\n", (int)pid); fclose(f); }
+    }
+    return 0;
+}
+
+int p_service_remove(const char *dir, char *why, size_t wcap)
+{
+    const char *k = p_service_kind();
+    (void)why; (void)wcap;
+    if (dry()) {
+        char p[1200], t[32]; snprintf(p, sizeof p, "%s/dry/pid", dir);
+        FILE *f = fopen(p, "r");
+        if (f) { if (fgets(t, sizeof t, f)) kill((pid_t)atoi(t), SIGTERM); fclose(f); }
+        return 0;
+    }
+    if (!strcmp(k, "systemd")) {
+        const char *a[] = { "systemctl", "disable", "--now", "custhub", NULL }; run_q(a);
+        unlink(SD_UNIT);
+        const char *b[] = { "systemctl", "daemon-reload", NULL }; run_q(b);
+    } else if (!strcmp(k, "procd")) {
+        const char *a[] = { PROCD, "stop", NULL }, *b[] = { PROCD, "disable", NULL }; run_q(a); run_q(b);
+        unlink(PROCD);
+    } else if (!strcmp(k, "launchd")) {
+        const char *a[] = { "launchctl", "bootout", "system/com.custhub.run", NULL }; run_q(a);
+        unlink(PLIST);
+    } else if (!strcmp(k, "launchd-user")) {
+        char svc[60], pl[1100]; snprintf(svc, sizeof svc, "gui/%d/com.custhub.run", (int)getuid());
+        snprintf(pl, sizeof pl, "%s/Library/LaunchAgents/com.custhub.run.plist", getenv("HOME") ? getenv("HOME") : "");
+        const char *a[] = { "launchctl", "bootout", svc, NULL }; run_q(a);
+        unlink(pl);
+    } else if (!strcmp(k, "systemd-user")) {
+        char u[1100]; snprintf(u, sizeof u, "%s/.config/systemd/user/custhub.service", getenv("HOME") ? getenv("HOME") : "");
+        const char *a[] = { "systemctl", "--user", "disable", "--now", "custhub", NULL }; run_q(a);
+        unlink(u);
+        const char *b[] = { "systemctl", "--user", "daemon-reload", NULL }; run_q(b);
+    }
+    return 0;
+}
+
+int p_rmtree(const char *path)
+{
+    struct stat st;
+    if (lstat(path, &st)) return 0;
+    if (!S_ISDIR(st.st_mode)) return unlink(path) ? -1 : 0;
+    DIR *d = opendir(path);
+    int bad = 0;
+    if (d) {
+        struct dirent *e;
+        char p[2048];
+        while ((e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof p, "%s/%s", path, e->d_name);
+            if (p_rmtree(p)) bad = 1;
+        }
+        closedir(d);
+    }
+    return rmdir(path) || bad ? -1 : 0;
+}
+
+int p_read_secret(const char *prompt, char *buf, size_t cap)
+{
+    int fd = open("/dev/tty", O_RDWR);
+    if (fd < 0) fd = 0;
+    struct termios t, o; int tty = !tcgetattr(fd, &o);
+    if (write(fd == 0 ? 2 : fd, prompt, strlen(prompt)) < 0) { /* 提示写不出也照读 */ }
+    if (tty) { t = o; t.c_lflag &= ~(unsigned)ECHO; t.c_lflag |= ECHONL; tcsetattr(fd, TCSANOW, &t); }
+    size_t n = 0; char c;
+    while (n < cap - 1 && read(fd, &c, 1) == 1 && c != '\n') buf[n++] = c;
+    buf[n] = 0;
+    if (tty) tcsetattr(fd, TCSANOW, &o);
+    if (fd > 0) close(fd);
+    return n ? 0 : -1;
+}

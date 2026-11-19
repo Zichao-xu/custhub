@@ -1,0 +1,206 @@
+/* 控制口(只听 127.0.0.1): 应用层从这里用网络
+ *   CONNECT <名字|公钥> <端口|sh>\n → OK\n 之后就是一条通到对方服务(本机端口 / shell)的字节流; 失败 ERR 原因\n
+ *   LS\n                          → 本机视角的网络状态
+ *   TRUST\n                       → 当前成员名单原文
+ *   TRUSTPUT <base64>\n           → 交一份新名单(验签、版本更新才收, 收了就沿链路传遍全网)
+ *   PENDQ <base64>\n              → 主钥匙当场签的查询("custhub-mesh-pending <秒>\n"+签名), 转给连着的中继, 汇总它们的待批准
+ * 每条连接第一行必须是 AUTH <令牌>(守护每次启动随机生成, 写在 <目录>/ctl.token; 读得到它的才是本机 root / 管理员 / 本人)
+ * mesh connect 是给 ssh ProxyCommand 用的小客户端: 标准输入输出 ↔ 控制口
+ * 控制口暂不鉴权(对方的服务层 + 通行证层把关); 正式版要加本机令牌 */
+#include "mesh.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+
+void ctl_accept(void)
+{
+    int fd = p_accept(G.cfd, NULL, 0);
+    if (fd < 0) return;
+    for (int q = 0; q < MAXQ; q++) if (G.q[q].fd <= 0) {
+        memset(&G.q[q], 0, sizeof G.q[q]);
+        G.q[q].fd = fd; G.q[q].born = now_ms();
+        return;
+    }
+    p_close(fd);
+}
+
+static void put_all(int fd, const void *pv, size_t n)
+{
+    const char *p = pv;
+    p_block(fd);
+    while (n) { long w = p_send(fd, p, n); if (w <= 0) break; p += w; n -= (size_t)w; }
+}
+
+static void put_str(int fd, const char *s) { put_all(fd, s, strlen(s)); }
+
+static int resolve(const char *s, uint8_t ed[32])
+{
+    member_t *m = member_by_name(s);
+    if (m) { memcpy(ed, m->ed, 32); return 0; }
+    return b64_decode(s, strlen(s), ed, 32) == 32 && member_by_ed(ed) ? 0 : -1;
+}
+
+void ctl_io(int qi)
+{
+    ctlq_t *q = &G.q[qi];
+    long r = p_recv(q->fd, q->line + q->n, sizeof q->line - 1 - q->n);
+    if (r == P_AGAIN) return;
+    if (r <= 0) { p_close(q->fd); q->fd = 0; return; }
+    q->n += (size_t)r; q->line[q->n] = 0;
+    char *nl = strchr(q->line, '\n');
+    if (!nl) { if (q->n >= sizeof q->line - 1) { p_close(q->fd); q->fd = 0; } return; }
+    if (!q->authed) {                                   /* 第一行: 令牌(常数时间比较) */
+        *nl = 0;
+        int bad = strncmp(q->line, "AUTH ", 5) || strlen(q->line + 5) != 32 || !G.ctl_token[0];
+        unsigned diff = 0;
+        for (int i = 0; !bad && i < 32; i++) diff |= (unsigned)(q->line[5 + i] ^ G.ctl_token[i]);
+        if (bad || diff) { put_str(q->fd, "ERR 令牌不对\n"); p_close(q->fd); q->fd = 0; return; }
+        q->authed = 1;
+        size_t rest = q->n - (size_t)(nl + 1 - q->line);
+        memmove(q->line, nl + 1, rest); q->n = rest; q->line[q->n] = 0;
+        nl = strchr(q->line, '\n');
+        if (!nl) return;                                /* 命令还没到 */
+    }
+    *nl = 0;
+    int fd = q->fd; q->fd = 0;
+    char cmd[16], a[64], b[16];
+    int f = sscanf(q->line, "%15s %63s %15s", cmd, a, b);
+    if (f >= 1 && !strcmp(cmd, "TRUST")) { put_all(fd, G.trust.text, G.trust.tlen); p_close(fd); return; }
+    if (f >= 2 && (!strcmp(cmd, "TRUSTPUT") || !strcmp(cmd, "PENDQ"))) {
+        static uint8_t d[MAXTEXT];
+        const char *arg = q->line + strlen(cmd) + 1;
+        long dn = b64_decode(arg, strlen(arg), d, sizeof d - 1);
+        if (dn <= 0) { put_str(fd, "ERR base64 不对\n"); p_close(fd); return; }
+        d[dn] = 0;
+        if (!strcmp(cmd, "TRUSTPUT")) {
+            long old = G.trust.ver;
+            int r = mtrust_apply((const char *)d, (size_t)dn, "本机控制口");
+            char m[120];
+            snprintf(m, sizeof m, r > 0 ? "OK 名单 v%ld → v%ld, 正沿链路传开\n" : r == 0 ? "OK 已有 v%ld, 不比它新(v%ld)\n" : "ERR 验签不过或格式不对(现有 v%ld)\n%.0ld",
+                     old, G.trust.ver);
+            put_str(fd, m); p_close(fd); return;
+        }
+        if (G.pq_fd > 0) { put_str(fd, "ERR 上一个查询还没完\n"); p_close(fd); return; }
+        int n = 0;
+        for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP && !G.c[i].closing && G.c[i].peer_relay) { conn_send(i, F_PENDQ, 0, d, (size_t)dn); n++; }
+        if (!n) { put_str(fd, "ERR 没有连着的中继\n"); p_close(fd); return; }
+        G.pq_fd = fd; G.pq_wait = n; G.pq_deadline = now_ms() + 4000; G.pq_out.len = 0;
+        return;
+    }
+    if (f >= 1 && !strcmp(cmd, "QUIT")) {                /* custhub remove 用: 正常退出(退出码 0, 服务管理器不当失败重启) */
+        put_str(fd, "OK 退出\n"); p_close(fd);
+        logf_("收到 QUIT, 退出");
+        exit(0);
+    }
+    if (f >= 1 && !strcmp(cmd, "LS")) {
+        buf_t o = { 0 }; ls_text(&o);
+        put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
+    }
+    uint8_t ed[32];
+    if (f == 3 && !strcmp(cmd, "CONNECT")) {
+        int port = atoi(b);
+        char req[16];
+        if (!strcmp(b, "sh")) snprintf(req, sizeof req, "sh");
+        else snprintf(req, sizeof req, "port:%d", port);
+        if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
+        if ((strcmp(b, "sh") && (port <= 0 || port > 65535)) || hop_open_local(fd, ed, req)) { put_str(fd, "ERR 参数不对或流满了\n"); p_close(fd); }
+        return;
+    }
+    put_str(fd, "ERR 不认识的命令\n");
+    p_close(fd);
+}
+
+static void add(buf_t *o, const char *fmt, ...)
+{
+    char t[1200]; va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(t, sizeof t, fmt, ap); va_end(ap);
+    if (n > 0) buf_add(o, t, (size_t)n < sizeof t ? (size_t)n : sizeof t - 1);
+}
+
+void ls_text(buf_t *o)
+{
+    char id[9]; short_id(G.id.ed, id);
+    add(o, "本机 %s(%s…) %s, 名单 v%ld, 版本 %s%s\n", G.name, id, G.me_relay ? "中继" : "节点", G.trust.ver, CH_VERSION,
+        member_by_ed(G.id.ed) ? "" : ", 还没被批准");
+    add(o, "端口: %s\n", G.port_state[0] ? G.port_state : "检测中");
+    add(o, "挂中继:\n");
+    for (int t = 0; t < G.nt; t++) {
+        int c = conn_by_peer(G.t[t].ed);
+        add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr, c >= 0 ? "通" : G.t[t].why);
+    }
+    add(o, "链路:\n");
+    for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP)
+        add(o, "  %-10s %s %s\n", name_of(G.c[i].peer), G.c[i].initiator ? "出站" : "入站", G.c[i].addr);
+    add(o, "位置记录:\n");
+    int64_t now = now_ms();
+    for (int i = 0; i < G.nr; i++) {
+        rec_t *r = &G.r[i];
+        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "中继" : "节点",
+            r->addr, r->relays, r->status, r->ver, (long)((now - r->rx_ms) / 1000));
+    }
+}
+
+/* ---------- 命令行一侧 ---------- */
+int ctl_open_raw(const char *dir)
+{
+    char p[300], t[4096], ctl[64] = "";
+    p_init();
+    snprintf(p, sizeof p, "%s/conf", dir);
+    if (m_read(p, t, sizeof t) < 0) { fprintf(stderr, "读不了 %s\n", p); return -1; }
+    char *s = strstr(t, "ctl ");
+    if (!s || (s != t && s[-1] != '\n') || sscanf(s + 4, "%63s", ctl) != 1) { fprintf(stderr, "conf 里没有 ctl\n"); return -1; }
+    char host[64]; int port;
+    if (hostport(ctl, host, sizeof host, &port)) return -1;
+    char tok[64] = "", why[64];
+    snprintf(p, sizeof p, "%s/ctl.token", dir);
+    if (m_read(p, tok, sizeof tok) < 32) { if (!G.quiet) fprintf(stderr, "读不了控制口令牌 %s(守护没在跑, 或者要 root / 管理员)\n", p); return -1; }
+    tok[strcspn(tok, "\r\n")] = 0;
+    int fd = p_dial(host, port, 0, why, sizeof why);
+    if (fd < 0) { if (!G.quiet) fprintf(stderr, "连不上本机网络守护(%s): %s\n", ctl, why); return -1; }
+    char l[80]; int n = snprintf(l, sizeof l, "AUTH %s\n", tok);
+    if (p_send(fd, l, (size_t)n) != n) { p_close(fd); return -1; }
+    return fd;
+}
+
+int cmd_ctl(const char *dir, const char *line)    /* 发一行命令, 打印回答(管理脚本用) */
+{
+    int fd = ctl_open_raw(dir);
+    if (fd < 0) return 1;
+    size_t n = strlen(line);
+    if (p_send(fd, line, n) != (long)n || p_send(fd, "\n", 1) != 1) return 1;
+    char b[4096]; long r; int err = 0, first = 1;
+    while ((r = p_recv(fd, b, sizeof b)) > 0) { if (first && !strncmp(b, "ERR", 3)) err = 1; first = 0; fwrite(b, 1, (size_t)r, stdout); }
+    return err;
+}
+
+int cmd_ls(const char *dir)
+{
+    int fd = ctl_open_raw(dir);
+    if (fd < 0) return 1;
+    if (p_send(fd, "LS\n", 3) != 3) return 1;
+    char b[4096]; long r;
+    while ((r = p_recv(fd, b, sizeof b)) > 0) fwrite(b, 1, (size_t)r, stdout);
+    return 0;
+}
+
+
+int ctl_open(const char *dir, const char *target, const char *req)
+{
+    int fd = ctl_open_raw(dir);
+    if (fd < 0) return -1;
+    char l[160]; int n = snprintf(l, sizeof l, "CONNECT %s %s\n", target, req);
+    if (p_send(fd, l, n) != n) { p_close(fd); return -1; }
+    char resp[200]; size_t k = 0;
+    while (k < sizeof resp - 1) { long r = p_recv(fd, resp + k, 1); if (r <= 0) break; if (resp[k++] == '\n') break; }
+    resp[k] = 0;
+    if (strncmp(resp, "OK\n", 3)) { fprintf(stderr, "mesh %s: %s", strcmp(req, "sh") ? "connect" : "sh", k ? resp : "守护没回话\n"); p_close(fd); return -1; }
+    return fd;
+}
+
+int cmd_connect(const char *dir, const char *target, const char *port)
+{
+    int fd = ctl_open(dir, target, port);
+    if (fd < 0) return 1;
+    return p_pump_stdio(fd);
+}
