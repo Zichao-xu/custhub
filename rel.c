@@ -649,7 +649,8 @@ void http_take(int fd, const char *req, size_t n)
     for (int k = 0; k < MAXPS; k++) if (!PS[k].used) {
         memset(&PS[k], 0, sizeof PS[k]);
         PS[k].used = 1; PS[k].s = fd; PS[k].f = f; PS[k].mem = mem; PS[k].mlen = mlen; PS[k].born = now_ms();
-        PS[k].n = (size_t)snprintf((char *)PS[k].b, sizeof PS[k].b, "HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", size);
+        PS[k].n = (size_t)snprintf((char *)PS[k].b, sizeof PS[k].b, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
+                                      mem ? "text/plain; charset=utf-8" : "application/octet-stream", size);   /* 脚本注明 UTF-8: Win7 的 WebClient 不注明就按 GBK 解, 中文会吞掉换行 */
         logf_("HTTP 发 %s 给 %s", path, host[0] ? host : "?");
         return;
     }
