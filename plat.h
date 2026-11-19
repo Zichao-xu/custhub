@@ -30,7 +30,7 @@ int  p_dial(const char *host, int port, int nb, char *why, size_t wcap);
 int  p_dial_result(int fd);                 /* 0 连上了; 否则错误号 */
 int  p_listen(const char *host, int port);  /* 非阻塞监听 fd; 失败 -1 */
 int  p_accept(int lfd, char *peer, size_t pcap);   /* 新 fd(非阻塞), peer = "地址:端口"; 没有 -1 */
-void p_open_firewall(int port);             /* 当中继开监听后放行入站(Linux: iptables), 其他平台什么都不做 */
+void p_open_firewall(int port);             /* 算可达开监听后放行入站(Linux: iptables), 其他平台什么都不做 */
 
 /* UDP(UPnP 找路由器用) */
 int  p_udp_open(void);                      /* 非阻塞 UDP socket; 失败 -1 */

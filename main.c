@@ -33,7 +33,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -76,6 +76,15 @@ int cmd_mesh(int argc, char **argv)
         crypto_ed25519_key_pair(sk, pk, seed);
         uint8_t kb[51]; char b[100]; b64_encode(kb, ssh_keyblob(pk, kb), b);
         printf("ssh-ed25519 %s custhub-master\n", b); return 0;
+    }
+    if (argc == 3 && !strcmp(c, "line")) {               /* 新机器的一行接入命令(问守护: 它知道谁现在可达) */
+        static char b[1024]; int fd = ctl_open_raw(argv[2]);
+        if (fd < 0 || p_send(fd, "LINE\n", 5) != 5) { fprintf(stderr, "连不上本机守护\n"); return 1; }
+        size_t n = 0; long r; while (n < sizeof b - 1 && (r = p_recv(fd, b + n, sizeof b - 1 - n)) > 0) n += (size_t)r;
+        p_close(fd); b[n] = 0;
+        char *nl = strchr(b, '\n'); if (!nl) { fprintf(stderr, "守护没给(旧版本?)\n"); return 1; }
+        *nl = 0; fprintf(stderr, "%s\n", strcmp(b, "-") ? b : "(网里没有可达的 0.3.11 以上的机器, 用 GitHub 的; Win7 用不了)");
+        fputs(nl + 1, stdout); return 0;
     }
     if (argc == 3 && !strcmp(c, "code")) {               /* 本机接入码 */
         snprintf(p, sizeof p, "%s/node.key", argv[2]);
@@ -120,6 +129,7 @@ int cmd_mesh(int argc, char **argv)
             "  custhub key pending                        待批准的机器(带接入码)\n"
             "  custhub key approve <接入码> <名字>        批准并起名\n"
             "  custhub key remove <名字>                  移出网络\n"
+            "  custhub line                               新机器的一行接入命令(从网里一台可达机器 http 下载, Win7 也能装)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"
             "                                             写 --for 时存成 <人>.pass, 发给对方\n\n"

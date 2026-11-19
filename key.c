@@ -127,7 +127,7 @@ int cmd_pass(int argc, char **argv)
 /* ===================== custhub key: 管理端(持主钥匙的一方) =====================
  *   key unlock [小时]        口令 → 主钥匙放进 ssh-agent(默认 8 小时; 派生同 passkey.py, 主钥匙不变)
  *   key lock | status
- *   key pending              各中继收到的报到(主钥匙当场签的查询), 带接入码
+ *   key pending              各可达节点收到的报到(主钥匙当场签的查询), 带接入码
  *   key approve <接入码> <名字>    批准: 名单加一行 node, 版本 +1, 签名, 交给本机节点沿链路传开
  *   key remove <名字> | ls
  *   key pass …               签通行证(同 mesh pass, 目录默认本机节点)
@@ -171,7 +171,7 @@ static int name_ok(const char *s)
     return 1;
 }
 
-static void master_line(char *out, size_t cap)
+void master_line(char *out, size_t cap)
 {
     uint8_t kb[51]; char b[100];
     b64_encode(kb, ssh_keyblob(G.master, kb), b);
@@ -209,7 +209,7 @@ static int trust_edit(const char *dir, const char *drop_name, const char *add_li
     return strncmp(resp, "OK", 2) ? 1 : 0;
 }
 
-/* 各中继的待批准: 每行 "<中继> <公钥> <时间> <来源> <自报信息>" */
+/* 各可达节点的待批准: 每行 "<可达节点> <公钥> <时间> <来源> <自报信息>" */
 static long pending_text(const char *dir, char *out, size_t cap)
 {
     char q[64], why[160]; static char t[2048], b64[3000], line[3100];
@@ -371,7 +371,7 @@ int cmd_key(int argc, char **argv)
             long n = in ? m_read(in, body, sizeof body) : -1;
             if (n <= 0 || strncmp(body, "custhub-mesh-trust ", 19) || n < 9 || strcmp(body + n - 8, "--end--\n")) {
                 fprintf(stderr, "用法: custhub key sign-trust <名单正文文件> [--master 主公钥] [--out 文件]\n"
-                                "  正文: 第一行 custhub-mesh-trust <版本>, 每行 relay <名字> <公钥> <地址:8444> 或 node <名字> <公钥>, 最后一行 --end--\n"); return 2; }
+                                "  正文: 第一行 custhub-mesh-trust <版本>, 每行 node <名字> <公钥> [<地址:8444>](带地址 = 种子线索), 最后一行 --end--\n"); return 2; }
             long al = agent_sshsig("custhub-mesh-trust", (const uint8_t *)body, (size_t)n, text + n, sizeof text - (size_t)n, why, sizeof why);
             if (al < 0) { fprintf(stderr, "签不了: %s\n", why); return 1; }
             memcpy(text, body, (size_t)n);
@@ -464,7 +464,7 @@ loaded:
         if (member_by_name(av[2])) { fprintf(stderr, "名字 %s 已经有人用了\n", av[2]); return 1; }
         member_t *m = member_by_name(av[1]);
         char kb[48], line[240]; b64_encode(m->ed, 32, kb);
-        int ll = snprintf(line, sizeof line, "%s %s %s", m->relay ? "relay" : "node", av[2], kb);
+        int ll = snprintf(line, sizeof line, "%s %s %s", "node", av[2], kb);
         if (m->relay && m->addr[0]) ll += snprintf(line + ll, sizeof line - (size_t)ll, " %s", m->addr);
         if (m->host[0]) snprintf(line + ll, sizeof line - (size_t)ll, " host=%s", m->host);
         int r = trust_edit(dir, av[1], line);

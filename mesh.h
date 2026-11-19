@@ -1,5 +1,5 @@
 /* custhub 网络层 POC(design-v3 §2~§3): 不依赖 SSH 的去中心化网络
- * 身份 = 节点 ed25519 公钥; 链路 = TCP + Noise IK; 中继转发 + 端到端 Noise; 名单(主钥匙签) / 位置记录(节点自签)分开
+ * 身份 = 节点 ed25519 公钥; 链路 = TCP + Noise IK; 可达节点转发 + 端到端 Noise; 名单(主钥匙签) / 位置记录(节点自签)分开
  * 单线程 poll 事件循环; 输入一律定长, 超长即拒
  * 核心不碰操作系统: 系统相关的一律经 plat.h(平台模块编译时选, design-v3 §0) */
 #ifndef MESH_H
@@ -12,7 +12,7 @@
 #define MESH_VER  "0.0.1"            /* 网络层协议版本(握手里报); 程序版本是 CH_VERSION, 平台名 CH_PLAT, 都由构建时 -D 给 */
 #define MAXC      128            /* 链路 */
 #define MAXS      256            /* 流(转发两端各占一个) */
-#define MAXT      8              /* 本机要挂的中继 */
+#define MAXT      8              /* 本机要挂的可达节点 */
 #define MAXQ      16             /* 控制口上还没说要干什么的连接 */
 #define MAXM      128            /* 名单成员 */
 #define MAXR      128            /* 位置记录 */
@@ -81,9 +81,9 @@ typedef struct {
     int closing;                  /* 1 = 发完就断, 不收任何帧; 3 = 名单外节点的报到链路: 发了名单, 再等一会儿它的回连测试请求 */
     int probe_for;                /* 回连测试的拨号(本机替别人测): 请求方链路下标 + 1; 0 = 不是 */
     int probe_in;                 /* 对方拨过来只为测本机端口: 握手完就断 */
-    member_t *pm;                 /* 对方在名单里的那一行(握手后); 访客链路上中继这边是 NULL */
-    int guest;                    /* 访客链路(design-v3 §0 第 11 条: 通行证即入场券): 中继这边 = 对方是名单外的持证人; 发起方这边 = 本机以访客身份挂上 */
-    pass_t gp;                    /* 中继这边: 访客出示的通行证(只转发到它 to 里的机器, 到期断开) */
+    member_t *pm;                 /* 对方在名单里的那一行(握手后); 访客链路上可达节点这边是 NULL */
+    int guest;                    /* 访客链路(design-v3 §0 第 11 条: 通行证即入场券): 可达节点这边 = 对方是名单外的持证人; 发起方这边 = 本机以访客身份挂上 */
+    pass_t gp;                    /* 可达节点这边: 访客出示的通行证(只转发到它 to 里的机器, 到期断开) */
     uint8_t peer[32];             /* 对方 ed25519 公钥 */
     char addr[64];
     hs_t hs; cs_t tx, rx;
@@ -106,7 +106,7 @@ typedef struct {
 } stream_t;
 
 typedef struct {
-    uint8_t ed[32]; char name[32], addr[64], alt[64], why[96];   /* addr: 中继自报(没有就是名单); alt: 名单里的线索(与 addr 不同时轮流试) */
+    uint8_t ed[32]; char name[32], addr[64], alt[64], why[96];   /* addr: 可达节点自报(没有就是名单); alt: 名单里的线索(与 addr 不同时轮流试) */
     int conn, flip; int64_t next_try, backoff;
 } target_t;
 
@@ -121,15 +121,15 @@ typedef struct {
     char hello[200];              /* 报到时自报的信息(机器名、通道公钥等), 管理员批准时对照用 */
     int allow[16], nallow;
     int lfd, cfd;
-    char lspec[80]; int64_t lretry_ms;  /* 中继监听(由名单决定) */
+    char lspec[80]; int64_t lretry_ms;  /* 可达节点监听(由名单决定) */
     int pq_fd, pq_wait; int64_t pq_deadline; buf_t pq_out;   /* 控制口上等着的"待批准"查询 */
     conn_t c[MAXC]; stream_t s[MAXS]; target_t t[MAXT]; int nt; ctlq_t q[MAXQ];
     rec_t r[MAXR]; int nr;
     uint64_t myseq; char mybody[700]; int64_t mypub_ms;
     int64_t last_up_ms, last_fb_ms;
-    int dump;                     /* 调试: 中继把转发的 DATA 原样追加到 dir/dump */
-    /* 中继资质(qual.c, design-v3 §0 第 14 条) */
-    int relay_off;                /* conf: relay off = 本机不当中继, 也不开监听 */
+    int dump;                     /* 调试: 可达节点把转发的 DATA 原样追加到 dir/dump */
+    /* 可达自检(qual.c, design-v3 §0 第 14 条) */
+    int relay_off;                /* conf: relay off = 本机不算可达, 也不开监听 */
     int probing, probe_conn; int64_t probe_next, probe_deadline, ok_since;
     char pub_addr[64];            /* 回连测试通过的对外地址 */
     char port_state[320];         /* 端口检测结果(给 ls / join 看) */
@@ -191,11 +191,11 @@ void disc_rec_in(int from, const char *line, size_t n);
 void disc_on_up(int i);
 void disc_tick(void);
 void targets_sync(void);
-void disc_pendq(int from, const uint8_t *pl, size_t n);   /* 中继: 主钥匙签名的查询 → 回待批准名单 */
-void disc_penda(int from, const uint8_t *pl, size_t n);   /* 查询方: 收各中继的回答 */
+void disc_pendq(int from, const uint8_t *pl, size_t n);   /* 可达节点: 主钥匙签名的查询 → 回待批准名单 */
+void disc_penda(int from, const uint8_t *pl, size_t n);   /* 查询方: 收各可达节点的回答 */
 void disc_pend_tick(void);
-int  ed_relay(const uint8_t ed[32]);                      /* 是中继: 自己在记录里声明了, 或名单里带地址(种子线索) */
-/* qual.c: 中继资质 */
+int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
+/* qual.c: 可达自检 */
 void qual_tick(void);
 int  me_seed(void);                                      /* 本机是名单里带地址的种子线索 */
 void upnp_tick(void);                                    /* upnp.c */
@@ -210,6 +210,9 @@ void rel_io(int code, short rev);
 int  pkg_accept(const char *req, char *why, size_t wcap);   /* pkg 服务: 返回交给连通层的本地 fd */
 void pkg_poll_add(pfd_t *p, int *np, int *map);          /* map 5000 起 */
 void pkg_io(int k, short rev);
+void http_take(int fd, const char *req, size_t n);       /* 只读 HTTP: 监听口上收到 GET */
+void http_tick(void);
+void join_line(char *out, size_t cap);                    /* app.c: 一行接入命令(第一行是地址, - = 退回 GitHub) */
 const char *upnp_lan_ip(void);
 void qual_probe_in(int from, const uint8_t *pl, size_t n);   /* 别人请本机替它测端口 */
 void qual_probe_ans(int from, const uint8_t *pl, size_t n);  /* 本机请别人测的结果 */

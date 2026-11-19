@@ -161,7 +161,7 @@ static void load_pending(void)
     char *sv = NULL;
     for (char *ln = m_tok(o, "\n", &sv); ln && npd < 32; ln = m_tok(NULL, "\n", &sv)) {
         pend_t p; memset(&p, 0, sizeof p);
-        /* "  接入码  公钥  来自 地址(经 中继)  机器名 平台 版本" */
+        /* "  接入码  公钥  来自 地址(经 可达节点)  机器名 平台 版本" */
         if (sscanf(ln, " %7s %47s", p.code, p.key) != 2 || strlen(p.code) != 7 || p.code[3] != '-') continue;
         const char *f = strstr(ln, "来自 "), *e = f ? strstr(f, ")") : NULL;
         if (!f) continue;
@@ -221,10 +221,9 @@ static void draw(void)
         if (i < nrw) {
             row_t *r = &RW[i]; int on = online(r);
             if (r->self) snprintf(conn, sizeof conn, "本机");
-            else if (r->link) snprintf(conn, sizeof conn, "直连%s%s", r->relay ? "(中继 " : "", r->relay ? r->addr : "");
+            else if (r->link) snprintf(conn, sizeof conn, "直连%s%s", r->relay ? " " : "", r->relay ? r->addr : "");
             else if (r->rec && strcmp(r->via, "-")) snprintf(conn, sizeof conn, "经 %s", r->via);
             else snprintf(conn, sizeof conn, "%s", r->relay ? r->addr : "-");
-            if (r->link && r->relay) strcat(conn, ")");
             out(i == sel ? "\x1b[7m" : "");
             snprintf(line, sizeof line, "%s %-13s", i == sel ? ">" : " ", r->name); cell(line, 16);
             out(i == sel ? "" : on ? "\x1b[32m" : "\x1b[2m"); cell(r->self ? "本机" : on ? "在线" : "离线", 6); out(i == sel ? "" : "\x1b[0m");
@@ -245,7 +244,7 @@ static void draw(void)
     char det[400] = "";
     if (sel < nrw && nrw) {
         row_t *r = &RW[sel];
-        snprintf(det, sizeof det, " %s  接入码 %s  %s%s  %s  公钥 %.12s…%s", r->name, r->code, r->relay ? "种子中继 " : "节点", r->relay ? r->addr : "",
+        snprintf(det, sizeof det, " %s  接入码 %s  %s%s  %s  公钥 %.12s…%s", r->name, r->code, r->relay ? "可达 " : "节点", r->relay ? r->addr : "",
                  r->plat[0] ? r->plat : "", r->key, r->rec && !r->self ? "  " : "");
         if (r->rec && !r->self) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "最近 %lds 前", r->age); }
     } else if (sel >= nrw && sel - nrw < npd) {
@@ -448,24 +447,19 @@ static void act_remove(void)
 
 static void act_new_client(void)
 {
-    char repo[100] = "Zichao-xu/custhub", p[1300], t[4096];
-    snprintf(p, sizeof p, "%s/conf", tdir);
-    char *g = m_read(p, t, sizeof t) > 0 ? strstr(t, "\ngithub ") : NULL;
-    if (g) sscanf(g + 8, "%99s", repo);
-    char u[200]; snprintf(u, sizeof u, "https://github.com/%s/releases/latest/download", repo);
-    /* 一行通用: Windows(Win+R / cmd / PowerShell, 弹 UAC)前半段; Mac / Linux 终端后半段。Win+R 上限 259 字符 */
-    static char line[600], line7[600], text[3200];
-    snprintf(line, sizeof line, "powershell -c \"start powershell -verb runas -args 'irm https://ghfast.top/%s/custhub3-join.ps1|iex;pause'\"; curl -fsSL %s/custhub3-join.sh|sh", u, u);
-    /* Win7 / 8: PowerShell 2.0 没有 irm, TLS 1.2 要自己开(要 .NET 4.5) */
-    /* PowerShell 2.0 没有 pause: 用 -NoExit 让管理员窗口停住, 出错也看得见 */
-    snprintf(line7, sizeof line7, "powershell -c \"start powershell -verb runas -args '-NoExit -c [Net.ServicePointManager]::SecurityProtocol=3072;iex(New-Object Net.WebClient).DownloadString(''https://ghfast.top/%s/custhub3-join.ps1'')'\"", u);
+    /* 一行通用(守护给, 见 app.c join_line): 地址是网里一台可达机器的 http://IP:端口(Win7 也能下); Windows 前半段, Mac / Linux 后半段 */
+    static char b[1024], text[3200];
+    if (ctl_get("LINE", b, sizeof b) <= 0 || !strchr(b, '\n')) { set_msg(1, "本机守护没给接入命令(还是旧版本?)"); return; }
+    char *line = strchr(b, '\n'); *line++ = 0;
+    char *e = strchr(line, '\n'); if (e) *e = 0;
     osc52(line);
     snprintf(text, sizeof text,
              "接入命令(已试着放进剪贴板; 终端不支持的话, 从下面复制):\n\n%s\n\n"
-             "  Windows 10 / 11: Win+R / cmd / PowerShell 里粘贴运行, 弹 UAC 点\"是\"\n"
-             "  Mac / Linux: 终端里粘贴运行(会要一次 sudo 密码)\n\n"
-             "Windows 7 / 8 用这条(cmd 里粘贴; 要 .NET 4.5 以上):\n\n%s\n\n"
-             "对方跑起来后, 这里会提示\"新机器报到\", 选中按 a 批准(最多等 30 分钟)。\n", line, line7);
+             "  Windows(7 起): Win+R / cmd / PowerShell 里粘贴运行, 弹 UAC 点\"是\"\n"
+             "  Mac / Linux: 终端里粘贴运行(会要一次 sudo 密码)\n"
+             "  下载来源: %s\n\n"
+             "对方跑起来后, 这里会提示\"新机器报到\", 选中按 a 批准(最多等 30 分钟)。\n", line,
+             strcmp(b, "-") ? b : "GitHub(网里没有可达的新版机器; Win7 下不了)");
     pager(" 新客户接入", text);
     watching = 1; watch_end = now_ms() + 1800000;
     size_t n = 0; watch_base[0] = 0;

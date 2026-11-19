@@ -34,7 +34,7 @@ REF=AAAAC3NzaC1lZDI1NTE5AAAAIGaN8mo46ha4VuLUZZB0GnCbI8wIk/98acXuXNQlBHCI
 [ -f ../../passkey.py ] && REF=$(CUSTHUB_PASSPHRASE="$PH" python3 ../../passkey.py pub | cut -d' ' -f2)
 ssh-add -L | grep -q "custhub-master$" && [ "$(ssh-add -L | grep custhub-master$ | cut -d' ' -f2)" = "$REF" ] && ok "agent 里的主钥匙和参考实现推出的一样(注释 custhub-master)" || ng "agent: $(ssh-add -L)"
 # 初始名单 v1 用 agent 里的主钥匙签(ssh-keygen 认 agent 里的钥匙)
-{ echo "custhub-mesh-trust 1"; echo "relay r $(cat "$T/r.pub") 127.0.0.1:$PR"; echo "node adm $(cat "$T/adm.pub")"; echo "--end--"; } >"$T/d1"
+{ echo "custhub-mesh-trust 1"; echo "node r $(cat "$T/r.pub") 127.0.0.1:$PR"; echo "node adm $(cat "$T/adm.pub")"; echo "--end--"; } >"$T/d1"
 ssh-keygen -q -Y sign -f "$T/master.pub" -n custhub-mesh-trust "$T/d1" 2>/dev/null && cat "$T/d1" "$T/d1.sig" >"$T/t1" || ng "ssh-keygen 用 agent 签不了"
 for n in r adm x y z; do cp "$T/t1" "$T/$n/trust"; done
 for n in r adm x y z; do CUSTHUB_MESH_PENDING_S=2 $M run "$T/$n" 2>/dev/null & done

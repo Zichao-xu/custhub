@@ -1,8 +1,8 @@
-/* 流: 中继转发(S_FWD 成对) + 本机两端(S_INIT 发起 / S_RESP 接收)
- *   OPEN  内容 = 目标公钥 32 + 来源公钥 32 + 剩余跳数 1; 中继按 route() 往下转, 流号逐段翻译
- *   流里先跑一次端到端 Noise IK(第一条 DATA 带要开的服务, 加密), 之后 DATA 都是端到端密文: 中继只看得到谁连谁
+/* 流: 可达节点转发(S_FWD 成对) + 本机两端(S_INIT 发起 / S_RESP 接收)
+ *   OPEN  内容 = 目标公钥 32 + 来源公钥 32 + 剩余跳数 1; 可达节点按 route() 往下转, 流号逐段翻译
+ *   流里先跑一次端到端 Noise IK(第一条 DATA 带要开的服务, 加密), 之后 DATA 都是端到端密文: 可达节点只看得到谁连谁
  *   连通层不管权限: 接收端把"谁、要开什么"交给服务层(svc.c), 由它和通行证层决定接不接
- *   额度: 每个方向 WIN 字节在途; 收端写给本地后回 CREDIT。中继不管额度, 只原样转 */
+ *   额度: 每个方向 WIN 字节在途; 收端写给本地后回 CREDIT。可达节点不管额度, 只原样转 */
 #include "mesh.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +47,7 @@ static int avoided(int c, const int *avoid, int na)
     return 0;
 }
 
-/* 选下一跳: 直连对方 > 对方位置记录里挂着的中继(且我和它连着) > (我不是中继时)任一中继 */
+/* 选下一跳: 直连对方 > 对方位置记录里挂着的可达节点(且我和它连着) > (我不是可达节点时)任一可达节点 */
 int route(const uint8_t dst[32], const int *avoid, int na)
 {
     int k = conn_by_peer(dst);
@@ -94,7 +94,7 @@ static void init_try(int si)
     if (!m) { init_fail(si, "名单里没有这个节点"); return; }
     if (s->ntried >= 8) { init_fail(si, "试过的路都不通"); return; }
     int r = route(s->dst, s->tried, s->ntried);
-    if (r < 0) { init_fail(si, "找不到路(没有能用的中继)"); return; }
+    if (r < 0) { init_fail(si, "找不到路(没有连得上的可达节点)"); return; }
     s->tried[s->ntried++] = r;
     s->conn = r; s->sid = conn_new_sid(r);
     hs_init(&s->hs, 1, G.id.xsec, G.id.x, m->x);
@@ -206,7 +206,7 @@ void hop_frame(int i, int type, uint32_t sid, const uint8_t *pl, size_t n)
         if (G.c[i].guest && !G.c[i].initiator) {          /* 访客只能开往通行证 to 里的机器, 来源必须是它自己 */
             char pw[80];
             if (memcmp(src, G.c[i].peer, 32) || pass_allows(&G.c[i].gp, G.c[i].peer, dst, NULL, wall_ms() / 1000, pw, sizeof pw)) {
-                snprintf(why, sizeof why, "中继不转: %s", memcmp(src, G.c[i].peer, 32) ? "来源不是访客自己" : pw);
+                snprintf(why, sizeof why, "不转发: %s", memcmp(src, G.c[i].peer, 32) ? "来源不是访客自己" : pw);
                 conn_send(i, F_CLOSE, sid, why, strlen(why));
                 return;
             }
@@ -247,7 +247,7 @@ void hop_conn_down(int i)
         if (s->kind == S_FWD) {
             int pi = s->pair;
             if (pi >= 0 && G.c[G.s[pi].conn].state == C_UP)
-                conn_send(G.s[pi].conn, F_CLOSE, G.s[pi].sid, ROUTE_ERR " 中继链路断了", strlen(ROUTE_ERR " 中继链路断了"));
+                conn_send(G.s[pi].conn, F_CLOSE, G.s[pi].sid, ROUTE_ERR " 转发链路断了", strlen(ROUTE_ERR " 转发链路断了"));
             s_free(si); if (pi >= 0) s_free(pi);
         } else if (s->kind == S_INIT && !s->up) init_try(si);
         else s_free(si);

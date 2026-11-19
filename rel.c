@@ -9,9 +9,9 @@
  *     file <平台> <字节数> <sha512 十六进制>
  *     --end--
  *   custhub3-<版本>-<平台>[.exe]   各平台程序
- * 来源: 位置记录里报了更新版本的成员(中继优先, 经 pkg 服务整包取、断点续传) → GitHub 直连 → ghfast → gh-proxy
+ * 来源: 位置记录里报了更新版本的成员(可达节点优先, 经 pkg 服务整包取、断点续传) → GitHub 直连 → ghfast → gh-proxy
  *   包和清单靠签名 + sha512 把关, 从谁那里拿都一样; 取包(pkg)免通行证, 只对名单成员开
- *   中继顺带缓存清单里所有平台的包, 当种子
+ *   可达节点顺带缓存清单里所有平台的包, 当种子
  * 节点目录里的文件: rel.release(手上最新的已验清单)  rel-<附件名>(手上的包, 给别人取)  rel-<附件名>.part(下载中)
  *   程序旁边: .new / .old / .bad; 目录里 upgrade.pending("旧版本 新版本 启动次数") 和 upgrade.bad("版本 回滚次数") */
 #include "mesh.h"
@@ -147,7 +147,7 @@ static void bad_add(const char *ver)
 /* ---------- 来源 ---------- */
 static void add_peer_sources(job_t *j, const char *need_ver)
 {
-    for (int pass = 0; pass < 2; pass++)                 /* 先中继, 后普通成员 */
+    for (int pass = 0; pass < 2; pass++)                 /* 先可达节点, 后普通成员 */
         for (int i = 0; i < G.nr && j->nsrc < MAXSRC - 3; i++) {
             rec_t *r = &G.r[i];
             if (ver_cmp(r->ver, need_ver) < 0 || !member_by_ed(r->ed) || (pass == 0) != (ed_relay(r->ed) != 0)) continue;
@@ -351,7 +351,28 @@ static void swap_in(const char *pkg, const char *ver)
 
 static void after_manifest(void);
 
-static void next_pkg(void)                               /* 本机平台先; 中继再把其他平台都缓存上 */
+/* 只留最新版: 清单换到新版本时删掉旧版本的包(启动时把更早攒下的也扫一遍) */
+static void drop_ver(const rel_t *r, const char *ver)
+{
+    char asset[96], n[120], p[400], pp[420];
+    for (int i = 0; i < r->nf; i++) {
+        asset_of(ver, r->f[i].plat, asset, sizeof asset);
+        snprintf(n, sizeof n, "rel-%s", asset); path_in(p, sizeof p, n);
+        snprintf(pp, sizeof pp, "%s.part", p);
+        remove(p); remove(pp);
+    }
+}
+
+static void drop_older(void)
+{
+    int x = 0, y = 0, z = 0;
+    if (!R.ver[0] || sscanf(R.ver, "%d.%d.%d", &x, &y, &z) != 3) return;
+    char v[32];
+    for (int b = y > 0 ? y - 1 : 0; b <= y; b++)
+        for (int c = 0; c < (b == y ? z : 100); c++) { snprintf(v, sizeof v, "%d.%d.%d", x, b, c); drop_ver(&R, v); }
+}
+
+static void next_pkg(void)                               /* 本机平台先; 再把清单里其他平台、源码、接入脚本都缓存上(给别人取, 也给 HTTP 发) */
 {
     char asset[96], dst[400], p[400];
     relf_t *mine = my_file(&R);
@@ -359,9 +380,8 @@ static void next_pkg(void)                               /* 本机平台先; 中
     for (int pass = 0; pass < 2; pass++)
         for (int i = 0; i < R.nf; i++) {
             relf_t *f = &R.f[i];
-            if ((pass == 0) != (f == mine)) continue;
-            if (pass == 0 && !want_up) continue;
-            if (pass == 1 && !G.me_relay) return;
+            if (pass == 0 && (f != mine || !want_up)) continue;
+            if (pass == 1 && f == mine && want_up) continue;   /* 不升的(灰度不含本机等)也把本平台的新包缓存上, 给别人 */
             asset_of(R.ver, f->plat, asset, sizeof asset);
             snprintf(p, sizeof p, "rel-%s", asset); path_in(dst, sizeof dst, p);
             FILE *t = fopen(dst, "rb");
@@ -380,7 +400,7 @@ static void job_done(int ok)
     int was_manifest = J.is_manifest;
     char asset[96]; snprintf(asset, sizeof asset, "%s", J.asset);
     J.active = 0;
-    if (!ok) { if (was_manifest && R.ver[0]) next_pkg(); return; }   /* 没有更新的清单: 照手上的再看一遍(中继补缓存) */
+    if (!ok) { if (was_manifest && R.ver[0]) next_pkg(); return; }   /* 没有更新的清单: 照手上的再看一遍(可达节点补缓存) */
     if (was_manifest) { after_manifest(); return; }
     logf_("取到 %s, 校验通过", asset);
     next_pkg();
@@ -400,6 +420,7 @@ static void after_manifest(void)
     rel_t old = R;
     load_manifest();
     if (man_fail) { logf_("又取到发布清单了"); man_fail = 0; }
+    if (old.ver[0] && ver_cmp(R.ver, old.ver) > 0) drop_ver(&old, old.ver);
     if (!old.ver[0] || ver_cmp(R.ver, old.ver) > 0) {     /* 清单变了才记 */
         logf_("发布清单 %s(本机 %s)", R.ver, CH_VERSION);
         if (R.gray && !R.me && ver_cmp(R.ver, CH_VERSION) > 0) logf_("%s 是灰度版本, 不含本机, 不升", R.ver);
@@ -436,6 +457,7 @@ int rel_successor(void)                                  /* 本进程是不是�
 void rel_start(void)
 {
     load_manifest();
+    drop_older();
     char from[32], to[32]; int tries;
     next_check = now_ms() + env_s("CUSTHUB_REL_FIRST_S", 20);
     if (!pending_read(from, to, &tries)) return;
@@ -454,13 +476,18 @@ void rel_tick(void)
         for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP && !G.c[i].closing && !G.c[i].probe_for && G.c[i].pm) up = 1;
         char from[32], to[32]; int tries;
         if (!pending_read(from, to, &tries)) in_trial = 0;
-        else if (up) { pending_clear(); in_trial = 0; logf_("%s 转正(已连上网络)", to); }
+        else if (up) {
+            pending_clear(); in_trial = 0; logf_("%s 转正(已连上网络)", to);
+            char cur[400], nw[420], old[420], bad[420]; self_paths(cur, nw, old, bad, sizeof cur);
+            remove(old); remove(bad);                    /* 转正了就不用回滚: 旧版程序删掉(Windows 上还被占着就删不掉, 下次再说) */
+        }
         else if (now - trial_ms > env_s("CUSTHUB_REL_TRIAL_S", 120)) rollback(from, to, "试用期内没连上网络");
     }
     if (J.fh >= 0) {
         int r = p_fetch_poll(J.fh);
         if (r != 0) { J.fh = -1; src_finished(r > 0); }
     } else if (J.active && J.sock < 0 && now - J.started > 600000) { logf_("取 %s 超时", J.asset); job_stop_src(); J.active = 0; }
+    http_tick();
     if (!J.active && now >= next_check) {
         next_check = now + env_s("CUSTHUB_REL_CHECK_S", 30);   /* 每台 30 秒问一次发布清单(约 2KB); 网内看到更新的版本 3 秒内就去取(rel_saw) */
         check_now();
@@ -469,7 +496,8 @@ void rel_tick(void)
 
 /* ---------- pkg 服务(给别人取包): 请求 "pkg:<附件名>:<从第几字节>" ---------- */
 #define MAXPS 8
-static struct { int s; FILE *f; uint8_t b[16384]; size_t n, o; } PS[MAXPS];
+static void slot_free(int k);
+static struct { int used, s; FILE *f; char *mem; size_t mlen, mo; uint8_t b[16384]; size_t n, o; int64_t born; } PS[MAXPS];
 
 int pkg_accept(const char *req, char *why, size_t wcap)
 {
@@ -484,13 +512,14 @@ int pkg_accept(const char *req, char *why, size_t wcap)
     char p[400], n[120];
     if (!strcmp(asset, "custhub3.release")) snprintf(n, sizeof n, "rel.release"); else snprintf(n, sizeof n, "rel-%s", asset);
     path_in(p, sizeof p, n);
-    for (int k = 0; k < MAXPS; k++) if (!PS[k].f) {
+    for (int k = 0; k < MAXPS; k++) if (!PS[k].used) {
         FILE *f = fopen(p, "rb");
         if (!f) { snprintf(why, wcap, "本机没有这个包"); return -1; }
         if (off < 0 || fseek(f, off, SEEK_SET)) { fclose(f); snprintf(why, wcap, "位置不对"); return -1; }
         int fd[2];
         if (p_pair(fd)) { fclose(f); snprintf(why, wcap, "开不了通道"); return -1; }
-        PS[k].s = fd[1]; PS[k].f = f; PS[k].n = PS[k].o = 0;
+        memset(&PS[k], 0, sizeof PS[k]);
+        PS[k].used = 1; PS[k].s = fd[1]; PS[k].f = f; PS[k].born = now_ms();
         return fd[0];
     }
     snprintf(why, wcap, "取包的人太多");
@@ -499,19 +528,138 @@ int pkg_accept(const char *req, char *why, size_t wcap)
 
 void pkg_poll_add(pfd_t *p, int *np, int *map)
 {
-    for (int k = 0; k < MAXPS; k++) if (PS[k].f) { p[*np].fd = PS[k].s; p[*np].ev = P_OUT; map[(*np)++] = 5000 + k; }
+    for (int k = 0; k < MAXPS; k++) if (PS[k].used) { p[*np].fd = PS[k].s; p[*np].ev = P_OUT; map[(*np)++] = 5000 + k; }
 }
 
 void pkg_io(int k, short rev)
 {
-    if (k < 0 || k >= MAXPS || !PS[k].f) return;
+    if (k < 0 || k >= MAXPS || !PS[k].used) return;
     if (rev & P_HUP) goto done;
     if (!(rev & P_OUT)) return;
-    if (PS[k].o == PS[k].n) { PS[k].n = fread(PS[k].b, 1, sizeof PS[k].b, PS[k].f); PS[k].o = 0; if (!PS[k].n) goto done; }
+    if (PS[k].o == PS[k].n) {                            /* 先发头(HTTP), 再发内存里的内容, 再发文件 */
+        PS[k].o = 0;
+        if (PS[k].mem && PS[k].mo < PS[k].mlen) { size_t m = PS[k].mlen - PS[k].mo; if (m > sizeof PS[k].b) m = sizeof PS[k].b; memcpy(PS[k].b, PS[k].mem + PS[k].mo, m); PS[k].mo += m; PS[k].n = m; }
+        else PS[k].n = PS[k].f ? fread(PS[k].b, 1, sizeof PS[k].b, PS[k].f) : 0;
+        if (!PS[k].n) goto done;
+    }
     long w = p_send(PS[k].s, PS[k].b + PS[k].o, PS[k].n - PS[k].o);
     if (w > 0) PS[k].o += (size_t)w; else if (w == P_FAIL) goto done;
     return;
 done:
-    fclose(PS[k].f); PS[k].f = NULL;
+    slot_free(k);
+}
+
+static void slot_free(int k)
+{
+    if (PS[k].f) fclose(PS[k].f);
+    free(PS[k].mem);
     p_shut_wr(PS[k].s); p_close(PS[k].s);
+    memset(&PS[k], 0, sizeof PS[k]);
+}
+
+/* ---------- 只读 HTTP(给还没装 custhub 的机器: 接入命令里的地址换成任一台可达机器的 http://IP:端口) ----------
+ * 监听口上第一个包以 "GET " 开头就交到这里(连通层的握手第一条不会这样开头); 路径照抄 GitHub Release:
+ *   /releases/latest/download/custhub3.release | custhub3.seed(按本机当前名单现出) | custhub3-join.ps1 | custhub3-join.sh
+ *   /releases/download/v<版本>/custhub3-<版本>-<平台>[.exe]    只给手上最新清单里的
+ * 接入脚本发出去时把里面的 GitHub 地址换成请求里的 Host, 后面的下载都回到本机; 只读, 发完就关 */
+void master_line(char *out, size_t cap);
+
+static char *script_for(const char *plat, const char *host, size_t *len)
+{
+    char asset[96], n[120], p[400], from[160], to[160];
+    asset_of(R.ver, plat, asset, sizeof asset);
+    snprintf(n, sizeof n, "rel-%s", asset); path_in(p, sizeof p, n);
+    static char t[65536];
+    long k = m_read(p, t, sizeof t - 1);
+    if (k <= 0 || !G.github[0]) return NULL;
+    t[k] = 0;
+    snprintf(from, sizeof from, "https://github.com/%s/releases", G.github);
+    snprintf(to, sizeof to, "http://%s/releases", host);
+    char *o = malloc((size_t)k * 2 + 1024); size_t ol = 0;
+    if (!o) return NULL;
+    for (const char *s = t; *s; ) {
+        const char *h = strstr(s, from);
+        size_t pre = h ? (size_t)(h - s) : strlen(s);
+        if (ol + pre + strlen(to) + 1 > (size_t)k * 2 + 1024) { free(o); return NULL; }
+        memcpy(o + ol, s, pre); ol += pre; s += pre;
+        if (h) { memcpy(o + ol, to, strlen(to)); ol += strlen(to); s += strlen(from); }
+    }
+    *len = ol;
+    return o;
+}
+
+static char *seed_now(size_t *len)
+{
+    if (!G.trust.tlen) return NULL;
+    char ml[200]; master_line(ml, sizeof ml);
+    char *o = malloc(G.trust.tlen + 512);
+    if (!o) return NULL;
+    int n = snprintf(o, 512, "custhub-seed v1\nmaster %s\ngithub %s\n--trust--\n", ml, G.github[0] ? G.github : "-");
+    memcpy(o + n, G.trust.text, G.trust.tlen);
+    *len = (size_t)n + G.trust.tlen;
+    return o;
+}
+
+static int name_ok_http(const char *s)
+{
+    if (!*s || strncmp(s, "custhub3", 8) || strstr(s, "..")) return 0;
+    for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '.' || *s == '-' || *s == '_')) return 0;
+    return 1;
+}
+
+static void http_reply(int fd, const char *status)
+{
+    char h[200]; int n = snprintf(h, sizeof h, "HTTP/1.0 %s\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%s\n", status, status);
+    p_send(fd, h, (size_t)n); p_shut_wr(fd); p_close(fd);
+}
+
+void http_take(int fd, const char *req, size_t n)
+{
+    char line[400], path[300] = "", host[100] = "";
+    size_t l = 0; while (l < n && l < sizeof line - 1 && req[l] != '\r' && req[l] != '\n') { line[l] = req[l]; l++; } line[l] = 0;
+    if (sscanf(line, "GET %299s", path) != 1) { http_reply(fd, "400 Bad Request"); return; }
+    char *q = strchr(path, '?'); if (q) *q = 0;
+    for (const char *h = req; h && h < req + n; h = strchr(h, '\n')) {
+        if (*h == '\n') h++;
+        if (!strncmp(h, "Host:", 5) || !strncmp(h, "host:", 5)) { sscanf(h + 5, " %99[^\r\n ]", host); break; }
+    }
+    for (char *c = host; *c; c++) if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '.' || *c == ':' || *c == '-' || *c == '[' || *c == ']')) { host[0] = 0; break; }
+    if (!R.ver[0]) { http_reply(fd, "503 Service Unavailable"); return; }
+    const char *lat = "/releases/latest/download/", *dl = "/releases/download/v";
+    char file[400] = "", *mem = NULL; size_t mlen = 0;
+    if (!strncmp(path, lat, strlen(lat))) {
+        const char *nm = path + strlen(lat);
+        if (!strcmp(nm, "custhub3.release")) path_in(file, sizeof file, "rel.release");
+        else if (!strcmp(nm, "custhub3.seed")) mem = seed_now(&mlen);
+        else if (!strcmp(nm, "custhub3-join.ps1") && host[0]) mem = script_for("join.ps1", host, &mlen);
+        else if (!strcmp(nm, "custhub3-join.sh") && host[0]) mem = script_for("join.sh", host, &mlen);
+    } else if (!strcmp(path, "/ps1") && host[0]) { mem = script_for("join.ps1", host, &mlen);    /* 短地址: 接入命令要塞进 Win+R(259 字) */
+    } else if (!strcmp(path, "/sh") && host[0]) { mem = script_for("join.sh", host, &mlen);
+    } else if (!strncmp(path, dl, strlen(dl))) {
+        const char *v = path + strlen(dl), *sl = strchr(v, '/');
+        char pre[64]; snprintf(pre, sizeof pre, "custhub3-%s-", R.ver);
+        if (sl && (size_t)(sl - v) == strlen(R.ver) && !strncmp(v, R.ver, strlen(R.ver)) && name_ok_http(sl + 1) && !strncmp(sl + 1, pre, strlen(pre))) {
+            char nn[300]; snprintf(nn, sizeof nn, "rel-%s", sl + 1); path_in(file, sizeof file, nn);
+        }
+    }
+    FILE *f = NULL; long size = 0;
+    if (!mem && file[0] && (f = fopen(file, "rb"))) { fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET); }
+    if (!mem && !f) { http_reply(fd, "404 Not Found"); return; }
+    if (mem) size = (long)mlen;
+    for (int k = 0; k < MAXPS; k++) if (!PS[k].used) {
+        memset(&PS[k], 0, sizeof PS[k]);
+        PS[k].used = 1; PS[k].s = fd; PS[k].f = f; PS[k].mem = mem; PS[k].mlen = mlen; PS[k].born = now_ms();
+        PS[k].n = (size_t)snprintf((char *)PS[k].b, sizeof PS[k].b, "HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n", size);
+        logf_("HTTP 发 %s 给 %s", path, host[0] ? host : "?");
+        return;
+    }
+    if (f) fclose(f);
+    free(mem);
+    http_reply(fd, "503 Service Unavailable");
+}
+
+void http_tick(void)                                     /* 卡住的下载 10 分钟后收掉 */
+{
+    int64_t now = now_ms();
+    for (int k = 0; k < MAXPS; k++) if (PS[k].used && now - PS[k].born > 600000) slot_free(k);
 }

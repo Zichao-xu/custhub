@@ -1,9 +1,9 @@
-/* 中继资质(design-v3 §0 第 14 条): 中继是功能, 节点自检有资质就开、没有就关, 名单不管
+/* 可达自检(design-v3 §0 第 14 条): 可达节点是功能, 节点自检有资质就开、没有就关, 名单不管
  *   资质 = 有别的节点从外面回连本机报出的地址成功(Noise 握手证明连到的就是本机), 并且过了观察期
- *   观察期: 回连一直通、在线一段时间(默认 30 分钟; 名单里带地址的种子线索免观察)才在位置记录里声明"我是中继"
+ *   观察期: 回连一直通、在线一段时间(默认 30 分钟; 名单里带地址的种子线索免观察)才在位置记录里声明"我是可达节点"
  *   复查: 默认每 10 分钟请一个连着的成员回连一次; 不通就撤掉声明、停止转发, 1 分钟后再试
  *   请别人测: F_PROBE(内容 = 本机监听端口, 或 conf announce 的整个地址); 对方用它看到的本机 IP 拼地址去拨, 回 F_PROBEA "ok 地址" / "no 原因"
- *   报到中的节点(还没批准)也能请中继测, 跑接入命令的人当场看到端口结果; 不当中继的报到节点发 "-", 中继就不等了 */
+ *   报到中的节点(还没批准)也能请可达节点测, 跑接入命令的人当场看到端口结果; 不算可达的报到节点发 "-", 可达节点就不等了 */
 #include "mesh.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,15 +36,15 @@ static void set_relay(int on, const char *why)
 {
     if (on == G.me_relay) return;
     G.me_relay = on;
-    if (on) logf_("当中继: 对外地址 %s(%s)", relay_addr(), why);
-    else logf_("不当中继: %s", why);
+    if (on) logf_("可达: 对外地址 %s(%s)", relay_addr(), why);
+    else logf_("不可达: %s", why);
     G.mypub_ms = 0;                                    /* 位置记录马上重发 */
 }
 
 void qual_tick(void)
 {
     int64_t now = now_ms();
-    if (G.relay_off) { snprintf(G.port_state, sizeof G.port_state, "本机设了不当中继"); set_relay(0, "本机设了不当中继"); return; }
+    if (G.relay_off) { snprintf(G.port_state, sizeof G.port_state, "本机设了 relay off(不对外)"); set_relay(0, "本机设了 relay off"); return; }
     if (G.lfd < 0) { port_state("没在监听%s%s", "", ""); set_relay(0, "没在监听"); return; }
     if (G.probing && now > G.probe_deadline) {
         G.probing = 0; G.ok_since = 0; G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
@@ -55,7 +55,7 @@ void qual_tick(void)
         set_relay(1, seeded() ? "种子线索, 免观察" : "过了观察期");
     upnp_tick();                                       /* 路由器自动映射 / 续租(到点才真做) */
     if (G.probing || now < G.probe_next) return;
-    int best = -1;                                     /* 找一个连着的成员替本机测, 中继优先 */
+    int best = -1;                                     /* 找一个连着的成员替本机测, 可达节点优先 */
     for (int i = 0; i < MAXC; i++) {
         conn_t *c = &G.c[i];
         if (c->state != C_UP || c->closing || c->probe_for || c->probe_in || c->guest) continue;
@@ -82,7 +82,7 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
         if (!G.announce[0]) snprintf(G.pub_addr, sizeof G.pub_addr, "%s", t + 3);
         G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_S", 600);
         port_state(G.upnp_port ? "已开启(UPnP 自动映射): %s 从外面连得进来%s" : "已开启: %s 从外面连得进来%s",
-                   relay_addr(), G.me_relay ? ", 当中继" : seeded() ? "" : ", 观察期中");
+                   relay_addr(), G.me_relay ? ", 可达" : seeded() ? "" : ", 观察期中");
     } else {
         G.ok_since = 0;
         G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
@@ -101,7 +101,7 @@ void qual_probe_in(int from, const uint8_t *pl, size_t n)
     if (n == 0 || n >= 70) return;
     char t[80], addr[80], host[64]; int port;
     memcpy(t, pl, n); t[n] = 0;
-    if (!strcmp(t, "-")) { if (G.c[from].closing == 3) conn_finish(from); return; }   /* 对方不当中继, 不用测 */
+    if (!strcmp(t, "-")) { if (G.c[from].closing == 3) conn_finish(from); return; }   /* 对方不算可达, 不用测 */
     int k = 0;
     for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE && G.c[i].probe_for) k++;
     if (k >= 8) { const char *m = "no 测试方太忙"; conn_send(from, F_PROBEA, 0, m, strlen(m)); return; }

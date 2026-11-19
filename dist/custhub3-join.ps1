@@ -1,6 +1,6 @@
 # custhub 接入(Windows 7 起, 用管理员身份打开 PowerShell):
 #   Win10 / 11:  irm https://github.com/__REPO__/releases/latest/download/custhub3-join.ps1 | iex
-#   Win7 / 8:    [Net.ServicePointManager]::SecurityProtocol=3072; iex (New-Object Net.WebClient).DownloadString('https://github.com/__REPO__/releases/latest/download/custhub3-join.ps1')
+#   Win7 / 8:    iex (New-Object Net.WebClient).DownloadString('http://<任一台可达机器的 IP:端口>/releases/latest/download/custhub3-join.ps1')  (Win7 连不了 GitHub 的 HTTPS, 从网里的机器取)
 # 取发布清单、本平台程序、种子(GitHub 直连 → ghfast → gh-proxy) → 按清单里的 sha512 核对程序 → custhub join --seed
 #   平台: Win10 1809 起用 win-x64 / win-x86; 更老的(Win7 / 8 / 8.1、没有 ConPTY 的 Win10)用 win7-x64 / win7-x86(补丁模块版)
 # 只用 PowerShell 2.0 就有的写法(Win7 自带 2.0): 不用 Invoke-WebRequest / Get-FileHash / ::new
@@ -11,7 +11,7 @@ $ProgressPreference = 'SilentlyContinue'                    # 不刷进度条(�
 function M($b) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)) }
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
 $repo = '__REPO__'
-$base = "https://github.com/$repo/releases"
+$base = 'https://github.com/__REPO__/releases'   # 从某台机器的 http://IP:端口 取时, 它发出来的这一行已换成它自己
 if ($env:CUSTHUB_BASE) { $base = $env:CUSTHUB_BASE }
 $tls12 = $true
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch { $tls12 = $false }   # TLS 1.2: .NET 3.5 没有

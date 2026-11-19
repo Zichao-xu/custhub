@@ -23,15 +23,14 @@ ssh-add -L 2>/dev/null | grep -q " custhub-master$" || { echo "主钥匙没解�
 [ -n "$SEED" ] && [ "$SEED" != - ] && { head -1 "$SEED" | grep -q "^custhub-seed v1$" || { echo "$SEED 不是种子" >&2; exit 1; }; M=$(sed -n "s/^master //p" "$SEED" | cut -d" " -f1,2); MA=(--master "$M"); }
 # 没有种子也没有节点(第一次建网): 主公钥就取 agent 里解锁进去的那把
 [ ${#MA[@]} -eq 0 ] && [ -z "$NODE" ] && MA=(--master "$(ssh-add -L | grep " custhub-master$" | head -1 | cut -d" " -f1,2)")
+# 接入脚本、源码也进清单: 每台机器都缓存最新版的全部发布物, 能用 http://IP:端口 发给还没装的机器
+for f in custhub3-join.sh custhub3-join.ps1; do sed "s#__REPO__#$REPO#g" "dist/$f" >"$O/$f"; cp "$O/$f" "$O/custhub3-$V-${f#custhub3-}"; done
+( cd .. && git ls-files -z mesh | tar --null -T - -czf "mesh/$O/custhub3-$V-src.tar.gz" -s "#^mesh#custhub-$V#" )
 echo "== 签发布清单、出种子"
 "${K[@]}" release "$V" "$O"/custhub3-"$V"-* ${ONLY:+--only "$ONLY"} --out "$O/custhub3.release" ${MA[@]+"${MA[@]}"}
 if [ "$SEED" = - ]; then echo "(--no-seed: 这次不带种子)"; elif [ -n "$SEED" ]; then cp "$SEED" "$O/custhub3.seed"; else "${K[@]}" seed --github "$REPO" --out "$O/custhub3.seed"; fi
-for f in custhub3-join.sh custhub3-join.ps1; do sed "s#__REPO__#$REPO#g" "dist/$f" >"$O/$f"; done
 ls -l "$O"
 [ $DRY = 1 ] && { echo "(--dry: 没发布)"; exit 0; }
 gh release view "v$V" --repo "$REPO" >/dev/null 2>&1 && { echo "Release v$V 已存在: 先改 VERSION" >&2; exit 1; }
 gh release create "v$V" --repo "$REPO" --title "custhub v$V" --latest --notes "custhub v$V" "$O"/*
-echo "已发布 v$V($REPO)。接入:"
-echo "  Linux / OpenWrt / macOS:  curl -fsSL https://github.com/$REPO/releases/latest/download/custhub3-join.sh | sh"
-echo "  Windows(管理员 PowerShell): irm https://github.com/$REPO/releases/latest/download/custhub3-join.ps1 | iex"
-echo "  Windows 7 / 8(管理员 PowerShell): [Net.ServicePointManager]::SecurityProtocol=3072; iex (New-Object Net.WebClient).DownloadString('https://github.com/$REPO/releases/latest/download/custhub3-join.ps1')"
+echo "已发布 v$V($REPO)。接入命令(Win7 起的 Windows / Mac / Linux 通用)由界面 n 或 custhub key line 生成: 地址是网里一台可达机器的 http://IP:端口"

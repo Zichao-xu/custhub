@@ -3,7 +3,7 @@
 #   每个节点跑自己的一份程序副本(换上新版互不影响); 新旧版本都是真构建出来的(VER / PLAT)
 #   1 有 GitHub 的 r、a 自己拉到新版, 换上、转正
 #   2 没有 GitHub 的 b 从网内取(断点续传的 pkg 服务), 换上
-#   3 中继 r 顺带缓存别的平台(t2)的包
+#   3 每台都缓存最新版全部发布物(别的平台、接入脚本); 只读 HTTP 发清单、程序、接入脚本、种子
 #   4 灰度: only a 的版本 a 升、b 不升
 #   5 清单里 sha512 不对: 谁都不升
 #   6 回滚: 换上后试用期内连不上网络 → 换回旧版
@@ -27,12 +27,14 @@ for n in r a b; do mkdir -p "$T/$n" "$T/bin-$n"; cp "$M" "$T/bin-$n/mesh"; $M ke
 ssh-keygen -q -Y sign -f "$T/master" -n custhub-mesh-trust "$T/data" 2>/dev/null; cat "$T/data" "$T/data.sig" >"$T/trust"
 i=0; for n in r a b; do i=$((i+1))
   printf 'master %s\nctl 127.0.0.1:%s\nlog %s\nupnp off\nname %s\n' "$(cat "$T/master.pub")" $((base+10+i)) "$T/$n.log" "$n" >"$T/$n/conf"; cp "$T/trust" "$T/$n/trust"
+  [ $n = r ] && echo "github o/r" >>"$T/$n/conf"
   [ $n = r ] || echo "relay off" >>"$T/$n/conf"
 done
 publish(){  # publish 版本 [only 行] [坏 sha]: 写清单 + 附件到假 GitHub
   local v=$1 only=${2:-} badsha=${3:-}
   { echo "custhub-rel v1"; echo "version $v"; echo "signed $(date +%s)"; [ -n "$only" ] && echo "only $only"
-    for p in t1 t2; do f=$T/m-$v-$p; [ -f "$f" ] || continue; cp "$f" "$T/gh/custhub3-$v-$p"
+    printf 'BASE=${CUSTHUB_BASE:-https://github.com/o/r/releases}\n' >"$T/m-$v-join.sh"
+    for p in t1 t2 join.sh; do f=$T/m-$v-$p; [ -f "$f" ] || continue; cp "$f" "$T/gh/custhub3-$v-$p"
       s=$(shasum -a 512 "$f" | cut -d' ' -f1); [ -n "$badsha" ] && [ $p = t1 ] && s=$(printf '%0128d' 0)
       echo "file $p $(wc -c <"$f" | tr -d ' ') $s"; done
     echo "--end--"; } >"$T/rel"
@@ -50,7 +52,7 @@ publish 0.0.2
 wait_for 30 sh -c "[ \"\$($T/bin-a/mesh version | awk '{print \$2}')\" = 0.0.2 ] && grep -q '0.0.2 转正' $T/a.log && grep -q '0.0.2 转正' $T/r.log"
 [ "$(ver a)" = 0.0.2 ] && [ "$(ver r)" = 0.0.2 ] && ok "r、a 自己从 GitHub 拉到 0.0.2 并换上" || ng "r=$(ver r) a=$(ver a)"
 grep -q "0.0.2 转正(已连上网络)" "$T/a.log" && ok "a 换上后连上网络, 转正" || ng "a 没转正"
-[ -f "$T/bin-a/mesh.old" ] && ok "旧版留在 .old(回滚用)" || ng "没有 .old"
+[ ! -f "$T/bin-a/mesh.old" ] && ok "转正后旧版 .old 删掉(只留最新版)" || ng ".old 还在"
 
 echo "== 2 没有 GitHub 的 b 从网内取"
 wait_for 30 sh -c "[ \"\$($T/bin-b/mesh version | awk '{print \$2}')\" = 0.0.2 ]"
@@ -58,10 +60,17 @@ wait_for 30 sh -c "[ \"\$($T/bin-b/mesh version | awk '{print \$2}')\" = 0.0.2 ]
 grep -q "取 custhub3-0.0.2-t1: 问 [ra]" "$T/b.log" && ! grep -q "取 custhub3-0.0.2-t1: http" "$T/b.log" && ok "b 的包是从网内的成员那里取的" || ng "b 取包: $(grep '取 custhub3-0.0.2-t1' "$T/b.log" | head -3)"
 grep -q "开本机 pkg:custhub3-0.0.2-t1" "$T/r.log" "$T/a.log" 2>/dev/null || grep -q "凭通行证开本机 pkg\|开本机 pkg" "$T"/*.log; ok "取包不用通行证(b 没有通行证)"
 
-echo "== 3 中继缓存别的平台"
-wait_for 15 test -f "$T/r/rel-custhub3-0.0.2-t2"
-[ -f "$T/r/rel-custhub3-0.0.2-t2" ] && ok "中继 r 缓存了 t2 的包" || ng "r 没缓存 t2"
-[ ! -f "$T/a/rel-custhub3-0.0.2-t2" ] && ok "普通节点 a 只留自己平台的" || ng "a 也缓存了 t2"
+echo "== 3 每台都缓存最新版的全部发布物; 只读 HTTP"
+wait_for 15 test -f "$T/r/rel-custhub3-0.0.2-t2"; wait_for 15 test -f "$T/a/rel-custhub3-0.0.2-join.sh"; wait_for 20 test -f "$T/b/rel-custhub3-0.0.2-join.sh"
+[ -f "$T/r/rel-custhub3-0.0.2-t2" ] && [ -f "$T/a/rel-custhub3-0.0.2-t2" ] && [ -f "$T/b/rel-custhub3-0.0.2-join.sh" ] && ok "r、a、b 都缓存了别的平台和接入脚本" || ng "缓存: $(ls "$T"/?/rel-* | tr '\n' ' ')"
+H=http://127.0.0.1:$PR
+curl -fsS "$H/releases/latest/download/custhub3.release" -o "$T/h.rel" && cmp -s "$T/h.rel" "$T/r/rel.release" && ok "HTTP: 发布清单" || ng "HTTP 清单"
+curl -fsS "$H/releases/download/v0.0.2/custhub3-0.0.2-t2" -o "$T/h.t2" && cmp -s "$T/h.t2" "$T/m-0.0.2-t2" && ok "HTTP: 别的平台的程序, 内容一致" || ng "HTTP 程序"
+o=$(curl -fsS "$H/sh"); [ "$o" = "BASE=\${CUSTHUB_BASE:-$H/releases}" ] && ok "HTTP: 接入脚本里的 GitHub 地址换成了本机($o)" || ng "HTTP 脚本: [$o]"
+curl -fsS "$H/releases/latest/download/custhub3.seed" | head -1 | grep -qx "custhub-seed v1" && curl -fsS "$H/releases/latest/download/custhub3.seed" | grep -q "^custhub-mesh-trust " && ok "HTTP: 按当前名单现出种子" || ng "HTTP 种子"
+c=$(curl -s -o /dev/null -w '%{http_code}' "$H/releases/download/v0.0.1/custhub3-0.0.1-t1"); c2=$(curl -s -o /dev/null -w '%{http_code}' "$H/../r/node.key")
+[ "$c" = 404 ] && [ "$c2" = 404 ] && ok "HTTP: 不是最新版的、清单外的一律 404" || ng "HTTP 404: $c $c2"
+up a && ok "HTTP 之后链路照常" || ng "a 断了"
 
 echo "== 4 灰度"
 publish 0.0.3 "a"
@@ -69,6 +78,8 @@ wait_for 30 sh -c "[ \"\$($T/bin-a/mesh version | awk '{print \$2}')\" = 0.0.3 ]
 sleep 3
 [ "$(ver a)" = 0.0.3 ] && [ "$(ver b)" = 0.0.2 ] && [ "$(ver r)" = 0.0.2 ] && ok "only a: a 升到 0.0.3, r、b 留在 0.0.2" || ng "r=$(ver r) a=$(ver a) b=$(ver b)"
 grep -q "0.0.3 是灰度版本, 不含本机" "$T/b.log" && ok "b 知道是灰度、不含自己" || ng "b 日志里没有灰度说明"
+wait_for 10 test -f "$T/r/rel-custhub3-0.0.3-t1"
+[ ! -f "$T/r/rel-custhub3-0.0.2-t2" ] && [ -f "$T/r/rel-custhub3-0.0.3-t1" ] && ok "清单换到 0.0.3: 0.0.2 的包删掉, 只留最新版" || ng "旧包: $(ls "$T"/r/rel-* | tr '\n' ' ')"
 
 echo "== 5 sha512 不对"
 publish 0.0.5 "" bad

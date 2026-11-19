@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 跨机器验收: 本机(工程师 e + 中继 r) ─局域网─ Windows 目标机 b
+# 跨机器验收: 本机(工程师 e + 可达节点 r) ─局域网─ Windows 目标机 b
 #   ./win-cross-test.sh <Windows 的 ssh 主机> <本机在局域网里的地址>
-#   b 只主动往外连本机的中继(Windows 上不开任何入站端口), e 经 r 开 b 的 shell 和端口
+#   b 只主动往外连本机的可达节点(Windows 上不开任何入站端口), e 经 r 开 b 的 shell 和端口
 #   ssh 只用来把 b 的文件拷过去、在那边起 b 的守护进程、事后检查和清理
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -45,10 +45,10 @@ $M run "$T/r" 2>/dev/null & $M run "$T/e" 2>/dev/null &
 ssh "$H" 'cmd /c "cd /d %TEMP%\meshx && mesh.exe run b"' >/dev/null 2>&1 &     # ssh 会话一断它就跟着停
 b_up(){ $M ls "$T/r" | grep -qE "^  b .*(入站|通)"; }
 for _ in $(seq 80); do b_up && break; sleep 0.25; done
-b_up && ok "Windows 上的 b 经局域网挂上本机中继 r" || { ng "b 没挂上 r"; $M ls "$T/r"; }
+b_up && ok "Windows 上的 b 经局域网挂上本机可达节点 r" || { ng "b 没挂上 r"; $M ls "$T/r"; }
 S(){ t60 $M sh "$T/e" b "$@"; }
 
-echo "== 1 跑命令(经中继)"
+echo "== 1 跑命令(经可达节点)"
 o=$(S -- echo hello </dev/null | od -An -tx1 | tr -d ' \n'); c=$?
 [ "$o" = 68656c6c6f0d0a ] && [ $c = 0 ] && ok "输出原样(cmd 的 CRLF), 退出码 0" || ng "echo: $o $c"
 S -- exit 4 </dev/null >/dev/null; c=$?
@@ -109,7 +109,7 @@ grep -q "exit 5" "$T/tty.out" && ok "交互退出码带回(5)" || ng "交互退�
 
 echo "== 3 端口"
 o=$(printf '' | t60 $M connect "$T/e" b 22 2>&1 | head -1 | tr -d '\r')
-echo "$o" | grep -q "^SSH-2.0-" && ok "经中继连 b 的 22 口, 收到横幅($o)" || ng "端口 22: [$o]"
+echo "$o" | grep -q "^SSH-2.0-" && ok "经可达节点连 b 的 22 口, 收到横幅($o)" || ng "端口 22: [$o]"
 
 echo "== 4 工程师那头走了"
 ( sleep 60 | $M sh "$T/e" b -- 'ping -n 300 127.0.0.1' >/dev/null 2>&1 ) &

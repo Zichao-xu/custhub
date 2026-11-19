@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 终端界面验收(design-v3 §0 第 20 条): 临时网络(中继 r + 管理员 adm + 新机器 x) + 临时 ssh-agent, 伪终端里按键
+# 终端界面验收(design-v3 §0 第 20 条): 临时网络(可达节点 r + 管理员 adm + 新机器 x) + 临时 ssh-agent, 伪终端里按键
 #   1 列表: r、adm 在, 主钥匙已解锁
 #   2 x 报到 → 待批准里出现 → a + 回车(默认名) → 批准
 #   3 s 签通行证给本机进 x → Enter 开 shell → 跑命令 → exit 回到列表

@@ -6,7 +6,7 @@
 #   管理电脑(用户模式, 不要 root): curl -fsSL …/custhub3-join.sh | CUSTHUB_JOIN_ARGS=--user sh
 set -e
 REPO=__REPO__
-BASE=${CUSTHUB_BASE:-https://github.com/$REPO/releases}
+BASE=${CUSTHUB_BASE:-https://github.com/__REPO__/releases}   # 从某台机器的 http://IP:端口 取时, 它发出来的这一行已换成它自己
 say(){ printf '%s\n' "$*" >&2; }
 die(){ say "✘ $*"; exit 1; }
 case "$(uname -s)/$(uname -m)" in

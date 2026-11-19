@@ -3,7 +3,7 @@
  *   LS\n                          → 本机视角的网络状态
  *   TRUST\n                       → 当前成员名单原文
  *   TRUSTPUT <base64>\n           → 交一份新名单(验签、版本更新才收, 收了就沿链路传遍全网)
- *   PENDQ <base64>\n              → 主钥匙当场签的查询("custhub-mesh-pending <秒>\n"+签名), 转给连着的中继, 汇总它们的待批准
+ *   PENDQ <base64>\n              → 主钥匙当场签的查询("custhub-mesh-pending <秒>\n"+签名), 转给连着的可达节点, 汇总它们的待批准
  * 每条连接第一行必须是 AUTH <令牌>(守护每次启动随机生成, 写在 <目录>/ctl.token; 读得到它的才是本机 root / 管理员 / 本人)
  * mesh connect 是给 ssh ProxyCommand 用的小客户端: 标准输入输出 ↔ 控制口
  * 控制口暂不鉴权(对方的服务层 + 通行证层把关); 正式版要加本机令牌 */
@@ -86,7 +86,7 @@ void ctl_io(int qi)
         if (G.pq_fd > 0) { put_str(fd, "ERR 上一个查询还没完\n"); p_close(fd); return; }
         int n = 0;
         for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP && !G.c[i].closing && G.c[i].peer_relay) { conn_send(i, F_PENDQ, 0, d, (size_t)dn); n++; }
-        if (!n) { put_str(fd, "ERR 没有连着的中继\n"); p_close(fd); return; }
+        if (!n) { put_str(fd, "ERR 没有连着的可达节点\n"); p_close(fd); return; }
         G.pq_fd = fd; G.pq_wait = n; G.pq_deadline = now_ms() + 4000; G.pq_out.len = 0;
         return;
     }
@@ -94,6 +94,9 @@ void ctl_io(int qi)
         put_str(fd, "OK 退出\n"); p_close(fd);
         logf_("收到 QUIT, 退出");
         exit(0);
+    }
+    if (f >= 1 && !strcmp(cmd, "LINE")) {               /* 新机器的一行接入命令: 地址取网里一台可达、版本最新的机器(rel.c 的只读 HTTP) */
+        char l[700]; join_line(l, sizeof l); put_str(fd, l); p_close(fd); return;
     }
     if (f >= 1 && !strcmp(cmd, "CODE")) {               /* 本机接入码(组里的账号读不了钥匙, 问守护) */
         char code[8], l[16]; join_code(G.id.ed, code); snprintf(l, sizeof l, "%s\n", code);
@@ -138,13 +141,33 @@ static void add(buf_t *o, const char *fmt, ...)
     if (n > 0) buf_add(o, t, (size_t)n < sizeof t ? (size_t)n : sizeof t - 1);
 }
 
+/* 一行通用接入命令(Win7 起的 Windows: Win+R / cmd / PowerShell, 弹 UAC; Mac / Linux: 终端), 第一行是用的地址
+ * 地址: 现在在线、从外面连得进来、版本最新(至少 0.3.11, 有只读 HTTP)的机器, 本机也算; 一台都没有就退回 GitHub(Win7 用不了) */
+void join_line(char *out, size_t cap)
+{
+    const char *best = NULL, *bv = "0.3.11"; char self[80] = "";
+    int64_t now = now_ms();
+    if (G.me_relay && ver_cmp(CH_VERSION, bv) >= 0) { snprintf(self, sizeof self, "%s", relay_addr()); best = self; bv = CH_VERSION; }
+    for (int i = 0; i < G.nr; i++) {
+        rec_t *r = &G.r[i];
+        if (!r->relay || !strcmp(r->addr, "-") || now - r->rx_ms > 180000 || !member_by_ed(r->ed)) continue;
+        if (ver_cmp(r->ver, bv) > 0 || (!best && ver_cmp(r->ver, bv) >= 0)) { best = r->addr; bv = r->ver; }
+    }
+    if (best) {
+        snprintf(out, cap, "http://%s\npowershell -c \"start powershell -verb runas -args '-NoExit -c iex(New-Object Net.WebClient).DownloadString(''http://%s/ps1'')'\"; curl -fsSL http://%s/sh|sh\n", best, best, best);
+        return;
+    }
+    char u[200]; snprintf(u, sizeof u, "https://github.com/%s/releases/latest/download", G.github[0] ? G.github : "Zichao-xu/custhub");
+    snprintf(out, cap, "-\npowershell -c \"start powershell -verb runas -args 'irm https://ghfast.top/%s/custhub3-join.ps1|iex;pause'\"; curl -fsSL %s/custhub3-join.sh|sh\n", u, u);
+}
+
 void ls_text(buf_t *o)
 {
     char id[9]; short_id(G.id.ed, id);
-    add(o, "本机 %s(%s…) %s, 名单 v%ld, 版本 %s%s\n", G.name, id, G.me_relay ? "中继" : "节点", G.trust.ver, CH_VERSION,
+    add(o, "本机 %s(%s…) %s, 名单 v%ld, 版本 %s%s\n", G.name, id, G.me_relay ? "可达" : "节点", G.trust.ver, CH_VERSION,
         member_by_ed(G.id.ed) ? "" : ", 还没被批准");
     add(o, "端口: %s\n", G.port_state[0] ? G.port_state : "检测中");
-    add(o, "挂中继:\n");
+    add(o, "挂着:\n");
     for (int t = 0; t < G.nt; t++) {
         int c = conn_by_peer(G.t[t].ed);
         add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr, c >= 0 ? "通" : G.t[t].why);
@@ -156,7 +179,7 @@ void ls_text(buf_t *o)
     int64_t now = now_ms();
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i];
-        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "中继" : "节点",
+        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "可达" : "节点",
             r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000));
     }
 }

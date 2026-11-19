@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 中继资质 + 批准流程(design-v3 §0 第 14 条: 中继是功能, 自检自动开关; 没有中转专用软件), 本机多进程
-#   r: 名单里带地址(种子线索), conf 里不写监听 → 按名单里的端口开监听, 回连测试通过就当中继(免观察期)
+# 可达节点资质 + 批准流程(design-v3 §0 第 14 条: 可达节点是功能, 自检自动开关; 没有中转专用软件), 本机多进程
+#   r: 名单里带地址(种子线索), conf 里不写监听 → 按名单里的端口开监听, 回连测试通过就算可达(免观察期)
 #   adm: 管理员的普通节点(relay off); b: 普通节点, 开着监听; c: 名单外, 报到等批准(relay off)
 #   1 种子线索 + 自检  2 报到拿到名单、进待批准、当场测端口  3 待批准只答主钥匙当场签的查询
-#   4 管理员节点交新名单 → 沿链路传开, c 下次报到拿到后接入  5 b 不在名单里标中继: 回连通过 + 观察期后自己当中继, 别人挂上来
+#   4 管理员节点交新名单 → 沿链路传开, c 下次报到拿到后接入  5 b 不在名单里标可达节点: 回连通过 + 观察期后自己算可达, 别人挂上来
 set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
@@ -52,12 +52,12 @@ wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1
 
 echo "== 1 种子线索 + 自检"
 wait_for 10 up adm r; wait_for 10 up b r
-wait_for 10 grep -q "当中继: 对外地址" "$T/r.log"
+wait_for 10 grep -q "可达: 对外地址" "$T/r.log"
 ok "r 按名单里的端口开了监听(conf 里没写)" 'grep -q "监听 0.0.0.0:$PR" "$T/r.log"'
-ok "r 回连测试通过就当中继(种子线索免观察期)" 'grep -q "当中继: 对外地址 127.0.0.1:$PR(种子线索, 免观察)" "$T/r.log"'
+ok "r 回连测试通过就算可达(种子线索免观察期)" 'grep -q "可达: 对外地址 127.0.0.1:$PR(种子线索, 免观察)" "$T/r.log"'
 ok "relay off 的 adm 不开监听" '! grep -q "监听" "$T/adm.log"'
 wait_for 10 sh -c "$M ls $T/d | grep -q 端口:.不通"
-ok "d 报的地址连不进来: 端口显示不通, 不当中继" '$M ls "$T/d" | grep -q "端口: 不通" && ! grep -q "当中继: 对外地址" "$T/d.log"'
+ok "d 报的地址连不进来: 端口显示不通, 不算可达" '$M ls "$T/d" | grep -q "端口: 不通" && ! grep -q "可达: 对外地址" "$T/d.log"'
 ok "adm、b 挂上 r" 'up adm r && up b r'
 ok "adm 经 r 连 b" '[ "$(printf hi | $M connect "$T/adm" b $ECHO)" = hi ]'
 
@@ -95,15 +95,15 @@ ok "c 下次报到拿到 v2 后接入" 'up c r'
 mkpass "$T/master" "$T/c/pass" "$(cat "$T/c.pub")" all "port:*"
 ok "c 现在能连 b" '[ "$(printf hi-c | $M connect "$T/c" b $ECHO)" = hi-c ]'
 
-echo "== 5 b 不在名单里标中继, 自检 + 观察期后自己当中继"
-ok "b 不是种子线索, 回连通过后先进观察期" 'grep -q "端口: 已开启: 127.0.0.1:$PB 从外面连得进来, 观察期中\|当中继" <($M ls "$T/b"; cat "$T/b.log")'
-wait_for 20 grep -q "当中继: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"
-ok "过了观察期 b 自己当中继, 地址是回连测出来的" 'grep -q "当中继: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"'
+echo "== 5 b 不在名单里标可达节点, 自检 + 观察期后自己算可达"
+ok "b 不是种子线索, 回连通过后先进观察期" 'grep -q "端口: 已开启: 127.0.0.1:$PB 从外面连得进来, 观察期中\|可达: 对外" <($M ls "$T/b"; cat "$T/b.log")'
+wait_for 20 grep -q "可达: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"
+ok "过了观察期 b 自己算可达, 地址是回连测出来的" 'grep -q "可达: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"'
 wait_for 15 up adm b; wait_for 15 up c b
-ok "adm、c 从 b 的位置记录得知它是中继, 自动挂上" 'up adm b && up c b'
+ok "adm、c 从 b 的位置记录得知它是可达节点, 自动挂上" 'up adm b && up c b'
 kill -9 $(pgrep -f "$M run $T/r") 2>/dev/null; sleep 1
 ok "关掉种子 r 后 c 经 b 仍能连 b 的服务" '[ "$(printf hi-b | $M connect "$T/c" b $ECHO)" = hi-b ]'
-ok "relay off 的 adm 始终没当中继" '! grep -q "当中继: 对外地址" "$T/adm.log"'
+ok "relay off 的 adm 始终没算可达" '! grep -q "可达: 对外地址" "$T/adm.log"'
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail -eq 0 ] || { KEEP=1; tail -n 12 "$T"/*.log; }

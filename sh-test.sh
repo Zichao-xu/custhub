@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sh 服务验收(design-v3 §0 第 2 条): 一台中继 r + 工程师机 e + 目标机 b(都在名单里) + 名单外持证的访客 g
+# sh 服务验收(design-v3 §0 第 2 条): 一台可达节点 r + 工程师机 e + 目标机 b(都在名单里) + 名单外持证的访客 g
 #   1 跑命令: 输出、退出码、窗口大小、大输出、标准输入
 #   2 交互: 从管道喂命令给登录 shell
 #   3 拒绝: 没证 / 证里没有 sh / 访客的证不含 b
@@ -30,9 +30,9 @@ done
 $M key --dir "$T/e" pass --to b --svc sh 2>/dev/null || ng "给 e 签发失败"
 $M key --dir "$T/e" pass --for "$(cat "$T/g.pub")" --to e --svc sh --out "$T/g/pass" 2>/dev/null || ng "给访客 g 签发失败"
 for n in r e b g; do $M run "$T/$n" 2>/dev/null & done
-up(){ $M ls "$T/$1" | awk '/^挂中继/{f=1;next} /^链路/{f=0} f' | grep -q ' 通$'; }
+up(){ $M ls "$T/$1" | awk '/^挂着/{f=1;next} /^链路/{f=0} f' | grep -q ' 通$'; }
 for _ in $(seq 60); do up e && up b && up g && break; sleep 0.25; done
-up e && up b && ok "e、b 挂上中继, 访客 g 也挂上" || ng "挂中继超时"
+up e && up b && ok "e、b 挂上可达节点, 访客 g 也挂上" || ng "挂上超时"
 S(){ t30 $M sh "$T/e" b "$@"; }
 
 echo "== 1 跑命令"
@@ -68,7 +68,7 @@ o=$(S -- true 2>&1 </dev/null)
 echo "$o" | grep -q "不含这项服务" && ok "通行证没有 sh 被拒: $o" || ng "证里无 sh: $o"
 cp "$T/e.pass" "$T/e/pass"
 o=$(t30 $M sh "$T/g" b -- true 2>&1 </dev/null)
-echo "$o" | grep -q "不含这台机器" && ok "访客开通行证外的 b 被中继拦下: $o" || ng "访客开 b: $o"
+echo "$o" | grep -q "不含这台机器" && ok "访客开通行证外的 b 被可达节点拦下: $o" || ng "访客开 b: $o"
 o=$(t30 $M sh "$T/g" e -- echo from-guest 2>&1 </dev/null | tr -d '\r')
 echo "$o" | grep -q "没有通行证\|不含这项服务" && ng "访客开 e 被拒(e 上应该能开): $o" || { [ "$o" = from-guest ] && ok "访客凭证开 e 的 shell" || ng "访客开 e: [$o]"; }
 

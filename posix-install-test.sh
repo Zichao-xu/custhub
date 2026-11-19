@@ -2,7 +2,7 @@
 # Linux / OpenWrt 真装验收: ./posix-install-test.sh <ssh 目标(root@主机)> <ssh 端口> <平台名(如 linux-arm64)> <本机局域网地址>
 #   真的 custhub join(OpenWrt: /usr/lib/custhub + procd; 其他 Linux: /opt/custhub + systemd), 测完 custhub remove, 确认没有残留
 #   测试节点 relay off + upnp off: 不开监听、不碰路由器端口映射, 尽量不影响那台机器
-#   本机: 中继 r + 管理员节点 adm(0.3.1) + 发布源; 那台装 0.3.0, 看到 adm 报的 0.3.1 就去取(curl / wget / uclient-fetch)、换上
+#   本机: 可达节点 r + 管理员节点 adm(0.3.1) + 发布源; 那台装 0.3.0, 看到 adm 报的 0.3.1 就去取(curl / wget / uclient-fetch)、换上
 set -uo pipefail
 cd "$(dirname "$0")"
 H=${1:?用法: ./posix-install-test.sh <root@主机> <ssh 端口> <平台名> <本机地址>}; HP=${2:?}; PL=${3:?}; ME=${4:?}

@@ -5,7 +5,7 @@
  *   relay <名字> <公钥 base64> <地址:端口>
  *   --end--
  *   -----BEGIN SSH SIGNATURE----- …(ssh-keygen -Y sign -n custhub-mesh-trust)
- * 位置记录: rec <公钥> <序号> <relay|node> <对外地址|-> <挂着的中继,…|-> <各中继状态,…|-> <版本> <签名> */
+ * 位置记录: rec <公钥> <序号> <relay|node> <对外地址|-> <挂着的可达节点,…|-> <各可达节点状态,…|-> <版本> <签名> */
 #include "mesh.h"
 #include "vendor/monocypher-ed25519.h"
 #include <stdio.h>
@@ -72,8 +72,9 @@ int mtrust_parse(const char *text, size_t len, trust_t *t, const uint8_t master[
         int f = sscanf(ln, "%23s %39s %63s %63s", a, nm, k, ad);
         if (!strcmp(a, NS)) { t->ver = atol(nm); continue; }
         if (!strcmp(a, "--end--")) break;
-        int relay = !strcmp(a, "relay");
+        int relay = !strcmp(a, "relay");                   /* 老写法 relay; 新写法 node 后面跟地址 = 种子线索 */
         if ((!relay && strcmp(a, "node")) || f < 3 || (relay && f < 4) || !ok_name(nm) || t->n >= MAXM) return -1;
+        if (!relay && f >= 4 && strncmp(ad, "host=", 5)) relay = 1;
         member_t *m = &t->m[t->n++];
         snprintf(m->name, sizeof m->name, "%s", nm);
         if (b64_decode(k, strlen(k), m->ed, 32) != 32) return -1;
@@ -88,7 +89,7 @@ int mtrust_parse(const char *text, size_t len, trust_t *t, const uint8_t master[
     return 0;
 }
 
-static void recompute_role(void) { }                  /* 中继不再由名单决定(qual.c 自检) */
+static void recompute_role(void) { }                  /* 可达节点不再由名单决定(qual.c 自检) */
 
 int ed_relay(const uint8_t ed[32])
 {
@@ -111,7 +112,7 @@ int mtrust_apply(const char *text, size_t len, const char *from)
     logf_("名单 v%ld → v%ld(来自 %s)", old, G.trust.ver, from);
     recompute_role();
     relay_sync();
-    if (!was_member && member_by_ed(G.id.ed)) {         /* 刚被批准: 报到时的链路在中继那边还算报到, 断掉马上按成员重新接入 */
+    if (!was_member && member_by_ed(G.id.ed)) {         /* 刚被批准: 报到时的链路在可达节点那边还算报到, 断掉马上按成员重新接入 */
         member_t *me = member_by_ed(G.id.ed);
         if (me) snprintf(G.name, sizeof G.name, "%s", me->name);
         logf_("已被批准(名单 v%ld 里有本机, 名字 %s), 重新接入", G.trust.ver, G.name);
@@ -140,7 +141,7 @@ void targets_sync(void)
     target_t old[MAXT]; int no = G.nt;
     memcpy(old, G.t, sizeof old);
     G.nt = 0;
-    /* 候选 = 名单里带地址的成员(种子线索) + 位置记录里自己声明了中继的成员; 挂之前自己连一次, 握手就是确认 */
+    /* 候选 = 名单里带地址的成员(种子线索) + 位置记录里自己声明了可达节点的成员; 挂之前自己连一次, 握手就是确认 */
     for (int i = 0; i < G.trust.n && G.nt < MAXT; i++) {
         member_t *m = &G.trust.m[i];
         if (!ed_relay(m->ed) || !memcmp(m->ed, G.id.ed, 32)) continue;
@@ -151,11 +152,11 @@ void targets_sync(void)
         snprintf(t->name, sizeof t->name, "%s", m->name);
         const char *addr = m->addr;
         rec_t *r = rec_by_ed(m->ed);
-        if (r && r->relay && strcmp(r->addr, "-")) addr = r->addr;   /* 中继自报的地址先试 */
-        /* 自报的可能过时(中继又搬了、记录还在), 名单的可能过时(还没改名单): 两个不同就轮流试 */
+        if (r && r->relay && strcmp(r->addr, "-")) addr = r->addr;   /* 可达节点自报的地址先试 */
+        /* 自报的可能过时(可达节点又搬了、记录还在), 名单的可能过时(还没改名单): 两个不同就轮流试 */
         snprintf(t->alt, sizeof t->alt, "%s", m->addr[0] && strcmp(addr, m->addr) ? m->addr : "");
         if (strcmp(t->addr, addr)) {
-            if (found) logf_("中继 %s 地址 %s → %s", m->name, t->addr, addr);
+            if (found) logf_("%s 地址 %s → %s", m->name, t->addr, addr);
             snprintf(t->addr, sizeof t->addr, "%s", addr);
             if (t->conn < 0) { t->next_try = 0; t->backoff = 1000; }
         }
@@ -179,7 +180,7 @@ const char *my_info(void)
     for (const char *c = raw; *c && o + 1 < sizeof inf; c++) {
         char ch = *c;
         if (ch == ' ' || ch == '\t') ch = '_';
-        if (ch == ',') ch = '.';                          /* 逗号是记录里中继列表的分隔符(Mac15,6 → Mac15.6) */
+        if (ch == ',') ch = '.';                          /* 逗号是记录里可达节点列表的分隔符(Mac15,6 → Mac15.6) */
         if (ch == '\r' || ch == '\n' || (unsigned char)ch < 32) continue;
         inf[o++] = ch;
     }
@@ -231,7 +232,7 @@ void disc_rec_in(int from, const char *line, size_t n)
     if (cur && r.seq <= cur->seq) return;
     int fresh = !cur;
     if (!cur) { if (G.nr >= MAXR) return; cur = &G.r[G.nr++]; }
-    int changed = fresh ? r.relay : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)));   /* 中继声明有变 */
+    int changed = fresh ? r.relay : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)));   /* 可达节点声明有变 */
     r.rx_ms = now_ms();
     *cur = r;
     rel_saw(r.ver);
@@ -279,7 +280,7 @@ void disc_tick(void)
         G.mypub_ms = now;
         flood(-1, full);
     }
-    /* 兜底: 节点一台中继都挂不上超过 10 秒 → 读兜底来源的名单; 中继每 10 秒看一次(管理员放新名单的地方)
+    /* 兜底: 节点一台可达节点都挂不上超过 10 秒 → 读兜底来源的名单; 可达节点每 10 秒看一次(管理员放新名单的地方)
      * 来源是本地文件: 客户机守护从中转 HTTP 取来放这里, 中转上是管理员 put 的那份; 以后加 GitHub Release */
     if (G.fallback[0] && now - G.last_fb_ms > 10000 && (G.me_relay || (!any_up && now - G.last_up_ms > 10000))) {
         G.last_fb_ms = now;
@@ -296,7 +297,7 @@ void disc_tick(void)
 #define PNS "custhub-mesh-pending"
 void disc_pendq(int from, const uint8_t *pl, size_t n)
 {
-    if ((!G.me_relay && !me_seed()) || n > 4000) return;   /* 收报到的(中继, 或还没自检通过的种子)才有待批准 */
+    if ((!G.me_relay && !me_seed()) || n > 4000) return;   /* 收报到的(可达节点, 或还没自检通过的种子)才有待批准 */
     char t[4096]; memcpy(t, pl, n); t[n] = 0;
     char *nl = strchr(t, '\n');
     long long ts;
@@ -328,7 +329,7 @@ void disc_pend_tick(void)
 {
     if (G.pq_fd <= 0 || (G.pq_wait > 0 && now_ms() < G.pq_deadline)) return;
     p_block(G.pq_fd);
-    if (G.pq_wait > 0) { const char *w = "# 有中继没回答(超时)\n"; p_send(G.pq_fd, w, strlen(w)); }
+    if (G.pq_wait > 0) { const char *w = "# 有节点没回答(超时)\n"; p_send(G.pq_fd, w, strlen(w)); }
     if (G.pq_out.len) p_send(G.pq_fd, G.pq_out.p, G.pq_out.len);
     p_close(G.pq_fd); G.pq_fd = 0; buf_free(&G.pq_out);
 }
@@ -374,6 +375,6 @@ int mesh_conf_load(const char *dir)
     if (me && !G.name[0]) snprintf(G.name, sizeof G.name, "%s", me->name);
     recompute_role();
     G.last_up_ms = now_ms();
-    logf_("启动: 名单 v%ld, %s%s", G.trust.ver, G.me_relay ? "中继" : "节点", me ? "" : "(本机不在名单里, 只能等批准)");
+    logf_("启动: 名单 v%ld, %s%s", G.trust.ver, G.me_relay ? "可达(从外面连得进来)" : "节点", me ? "" : "(本机不在名单里, 只能等批准)");
     return 0;
 }

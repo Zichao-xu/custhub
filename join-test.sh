@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 接入验收(design-v3 §0 第 17 条): 演练模式(CUSTHUB_SVC_DRY=1: 服务文件写到 安装目录/node/dry/, 不碰系统, 守护直接在后台起)
 #   1 join: 种子验签 → 装程序 → 节点钥匙 → conf → 服务文件 → 报到, 屏幕显示接入码, 等批准
-#   2 管理员把它加进名单(这里直接签名单交给中继) → join 显示已接入
+#   2 管理员把它加进名单(这里直接签名单交给可达节点) → join 显示已接入
 #   3 三种服务文件(systemd / procd / launchd)的内容
 #   4 重复执行: 钥匙不变, 已在名单里不用再批准
 #   5 remove: 停服务、删安装目录
@@ -37,7 +37,7 @@ grep -q "^github example/custhub$" "$T/home/node/conf" && grep -q "^ctl 127.0.0.
 grep -qF "ExecStart=\"$T/home/custhub\" run \"$T/home/node\"" "$T/home/node/dry/custhub.service" && grep -q "^Restart=always" "$T/home/node/dry/custhub.service" && ok "systemd 服务文件: 跑 custhub run, 挂了自动拉起" || ng "systemd: $(cat "$T/home/node/dry/custhub.service" 2>&1)"
 NP=$($M pub "$T/home/node")
 wait_for 15 grep -qF "$NP" "$T/r/pending"
-grep -qF "$NP" "$T/r/pending" && ok "节点向中继报到, 进了待批准" || ng "中继的待批准里没有它"
+grep -qF "$NP" "$T/r/pending" && ok "节点向可达节点报到, 进了待批准" || ng "可达节点的待批准里没有它"
 
 echo "== 2 批准"
 sign 2 "relay r $(cat "$T/r.pub") 127.0.0.1:$PR" "node n1 $NP" >"$T/t2"

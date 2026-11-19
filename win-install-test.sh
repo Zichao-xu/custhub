@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Windows 真装验收: ./win-install-test.sh <Windows 的 ssh 主机> <本机局域网地址>
 #   真的 custhub join(装进 C:\ProgramData\custhub、注册计划任务、以 SYSTEM 跑), 测完 custhub remove, 确认没有残留
-#   本机: 中继 r + 管理员节点 adm(0.3.1) + 假 GitHub; Windows 节点装 0.3.0, 看到 adm 报的 0.3.1 就去取、换上、接班
+#   本机: 可达节点 r + 管理员节点 adm(0.3.1) + 假 GitHub; Windows 节点装 0.3.0, 看到 adm 报的 0.3.1 就去取、换上、接班
 #   1 join → 批准 → 计划任务在、进程是 SYSTEM
 #   2 SYSTEM 身份下的 shell: 跑命令、ConPTY 交互、Ctrl-C
 #   3 升级: WinHTTP 从假 GitHub 取包、换上正在跑的程序、新进程接班、转正

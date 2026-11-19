@@ -1,6 +1,6 @@
 /* 链路: TCP + Noise IK; 线上格式 [2 字节长度][Noise 消息]; 握手后每条消息是一帧 [类型 1][流号 4][内容]
- * 节点出站挂名单里的中继; 中继还接受入站, 并且互相挂(两条重复链路按"发起方公钥小的留下")
- * 握手第一条的内容(加密)= "custhub-mesh/版本 <ed25519 公钥> <自报信息>": 中继据此把名单外的节点记进待批准 */
+ * 节点出站挂名单里的可达节点; 可达节点还接受入站, 并且互相挂(两条重复链路按"发起方公钥小的留下")
+ * 握手第一条的内容(加密)= "custhub-mesh/版本 <ed25519 公钥> <自报信息>": 可达节点据此把名单外的节点记进待批准 */
 #include "mesh.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,7 +110,7 @@ static void dedupe(int i)
     for (int j = 0; j < MAXC; j++) {
         if (j == i || G.c[j].state != C_UP || memcmp(G.c[j].peer, c->peer, 32)) continue;
         int drop = j;
-        if (c->initiator != G.c[j].initiator) {        /* 双方各拨了一条: 两边按同一规则留, 不看当不当中继(否则两边各删一条, 反复重连) */
+        if (c->initiator != G.c[j].initiator) {        /* 双方各拨了一条: 两边按同一规则留, 不看当不算可达(否则两边各删一条, 反复重连) */
             int me_small = memcmp(G.id.ed, c->peer, 32) < 0;
             int keep_mine = me_small;                 /* 公钥小的一方发起的那条留下 */
             drop = (c->initiator == keep_mine) ? j : i;
@@ -125,8 +125,8 @@ static void on_up(int i)
     conn_t *c = &G.c[i];
     c->state = C_UP;
     c->peer_relay = c->pm ? ed_relay(c->peer) : 0;
-    if (!member_by_ed(G.id.ed) && !c->guest) {         /* 本机还没被批准也没通行证: 这条链路只是报到, 等中继发来名单后断开 */
-        if (G.relay_off || G.lfd < 0) conn_send(i, F_PROBE, 0, "-", 1);   /* 本机不当中继: 告诉中继不用等回连测试请求 */
+    if (!member_by_ed(G.id.ed) && !c->guest) {         /* 本机还没被批准也没通行证: 这条链路只是报到, 等可达节点发来名单后断开 */
+        if (G.relay_off || G.lfd < 0) conn_send(i, F_PROBE, 0, "-", 1);   /* 本机不算可达: 告诉可达节点不用等回连测试请求 */
         return;
     }
     logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
@@ -255,7 +255,7 @@ static void on_msg(int i, uint8_t *m, size_t n)
             conn_close(i, "回连测试完成");
             return;
         }
-        if (!member_by_ed(G.id.ed) && r >= 6 && !memcmp(pl + r - 6, " guest", 6)) c->guest = 1;   /* 中继认了本机的通行证 */
+        if (!member_by_ed(G.id.ed) && r >= 6 && !memcmp(pl + r - 6, " guest", 6)) c->guest = 1;   /* 可达节点认了本机的通行证 */
         on_up(i);
         return;
     }
@@ -270,6 +270,12 @@ static void on_msg(int i, uint8_t *m, size_t n)
     on_frame(i, pl, (size_t)r);
 }
 
+static const void *memmem_(const void *h, size_t hn, const void *n, size_t nn)
+{
+    for (size_t i = 0; i + nn <= hn; i++) if (!memcmp((const char *)h + i, n, nn)) return (const char *)h + i;
+    return NULL;
+}
+
 static void conn_read(int i)
 {
     conn_t *c = &G.c[i];
@@ -280,6 +286,15 @@ static void conn_read(int i)
     if (r < 0) { conn_close(i, p_strerr(p_lasterr())); return; }
     c->last_rx = now_ms();
     if (buf_add(&c->in, tmp, (size_t)r)) { conn_close(i, "内存不足"); return; }
+    if (c->state == C_HS && !c->initiator && c->in.len >= 4 && !memcmp(c->in.p, "GET ", 4)) {   /* 普通 HTTP 下载(rel.c): 握手第一条的长度头不会是 "GE" */
+        if (c->in.len > 4096) { conn_close(i, "HTTP 请求太长"); return; }
+        if (!memmem_(c->in.p, c->in.len, "\r\n\r\n", 4) && !memmem_(c->in.p, c->in.len, "\n\n", 2)) return;   /* 等请求头收齐 */
+        static char rq[4097]; size_t rn = c->in.len; memcpy(rq, c->in.p, rn); rq[rn] = 0;
+        int fd = c->fd; c->fd = -1;
+        conn_close(i, "HTTP");
+        http_take(fd, rq, rn);
+        return;
+    }
     size_t off = 0;
     while (c->state != C_FREE && c->in.len - off >= 2) {
         size_t n = (size_t)c->in.p[off] << 8 | c->in.p[off + 1];
@@ -301,7 +316,7 @@ static void conn_write(int i)
         static char pl[PASSMAX + 300]; char edb[48];
         b64_encode(G.id.ed, 32, edb);
         int pn = snprintf(pl, sizeof pl, "%s %s %s", HELLO, edb, c->probe_for ? "probe" : G.hello[0] ? G.hello : G.name);
-        if (!member_by_ed(G.id.ed) && !c->probe_for) {                    /* 名单外: 有通行证就附上, 中继认了就以访客身份接入 */
+        if (!member_by_ed(G.id.ed) && !c->probe_for) {                    /* 名单外: 有通行证就附上, 可达节点认了就以访客身份接入 */
             pl[pn++] = '\n';
             int k = pass_load(NULL, NULL, pl + pn, sizeof pl - (size_t)pn);
             if (k) pn += k; else pn--;
@@ -342,7 +357,7 @@ static void dial(int t)
     tg->conn = i;
 }
 
-/* 中继接受一条入站链路; fd 也可以由别的程序递进来(中转 8443 上按第一个字节分流后转给我们) */
+/* 可达节点接受一条入站链路; fd 也可以由别的程序递进来(中转 8443 上按第一个字节分流后转给我们) */
 static void take_inbound(int fd, const char *addr)
 {
     p_nb(fd);
@@ -394,7 +409,7 @@ static void tick(void)
     for (int q = 0; q < MAXQ; q++) if (G.q[q].fd > 0 && now - G.q[q].born > 5000) { p_close(G.q[q].fd); G.q[q].fd = 0; }
 }
 
-/* 监听(design-v3 §0 第 14 条): 每个节点都开(conf relay off 除外), 当不当中继由回连测试决定(qual.c)
+/* 监听(design-v3 §0 第 14 条): 每个节点都开(conf relay off 除外), 当不算可达由回连测试决定(qual.c)
  * 默认 0.0.0.0:8444, conf 的 listen 可覆盖; Linux 上开监听时顺手放行防火墙 INPUT(宿主机常有别家的 DROP) */
 const char *relay_addr(void)
 {
@@ -417,7 +432,7 @@ void relay_sync(void)
     G.lfd = listen_on(want);
     if (G.lfd < 0) { logf_("监听 %s 失败, 稍后再试", want); return; }
     snprintf(G.lspec, sizeof G.lspec, "%s", want);
-    logf_("监听 %s(回连测试通过、过了观察期才当中继)", want);
+    logf_("监听 %s(回连测试通过、过了观察期才算可达)", want);
     if (!hostport(want, host, sizeof host, &port)) p_open_firewall(port);
 }
 
