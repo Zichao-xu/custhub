@@ -45,6 +45,8 @@ typedef struct {
     int64_t started;
 } job_t;
 
+static int man_fail;                                     /* 发布清单连续取不到的次数(只记第一次) */
+
 static rel_t R;                             /* 手上最新的已验清单 */
 static job_t J = { .fh = -1, .sock = -1 };
 static int64_t next_check, trial_ms;
@@ -206,15 +208,15 @@ static void job_try(void)
             char req[160]; snprintf(req, sizeof req, "pkg:%s:%ld", J.asset, J.have);
             if (hop_open_local(fd[0], J.src[J.si].ed, req)) { p_close(fd[0]); p_close(fd[1]); fclose(f); J.si++; continue; }
             J.part = f; J.sock = fd[1]; J.got_ok = 0;
-            logf_("取 %s: 问 %s(从 %ld 字节起)", J.asset, name_of(J.src[J.si].ed), J.have);
+            if (!J.is_manifest) logf_("取 %s: 问 %s(从 %ld 字节起)", J.asset, name_of(J.src[J.si].ed), J.have);   /* 清单 30 秒问一次, 不记 */
             return;
         }
         remove(part);
         J.fh = p_fetch_start(J.src[J.si].url, part);
-        if (J.fh >= 0) { logf_("取 %s: %s", J.asset, J.src[J.si].url); return; }
+        if (J.fh >= 0) { if (!J.is_manifest) logf_("取 %s: %s", J.asset, J.src[J.si].url); return; }
         J.si++;
     }
-    logf_("取 %s: 所有来源都不行", J.asset);
+    if (!J.is_manifest || !man_fail++) logf_("取 %s: 所有来源都不行%s", J.asset, J.is_manifest ? "(之后连不上不再记, 连上了再说)" : "");
     job_done(0);
 }
 
@@ -395,9 +397,12 @@ static void after_manifest(void)
 {
     rel_t old = R;
     load_manifest();
-    if (!old.ver[0] || ver_cmp(R.ver, old.ver) > 0) logf_("发布清单 %s(本机 %s)", R.ver, CH_VERSION);
-    if (R.gray && !R.me && ver_cmp(R.ver, CH_VERSION) > 0) logf_("%s 是灰度版本, 不含本机, 不升", R.ver);
-    if (!my_file(&R) && ver_cmp(R.ver, CH_VERSION) > 0) logf_("%s 没有本平台(%s)的包", R.ver, CH_PLAT);
+    if (man_fail) { logf_("又取到发布清单了"); man_fail = 0; }
+    if (!old.ver[0] || ver_cmp(R.ver, old.ver) > 0) {     /* 清单变了才记 */
+        logf_("发布清单 %s(本机 %s)", R.ver, CH_VERSION);
+        if (R.gray && !R.me && ver_cmp(R.ver, CH_VERSION) > 0) logf_("%s 是灰度版本, 不含本机, 不升", R.ver);
+        if (!my_file(&R) && ver_cmp(R.ver, CH_VERSION) > 0) logf_("%s 没有本平台(%s)的包", R.ver, CH_PLAT);
+    }
     next_pkg();
 }
 
@@ -449,7 +454,7 @@ void rel_tick(void)
         if (r != 0) { J.fh = -1; src_finished(r > 0); }
     } else if (J.active && J.sock < 0 && now - J.started > 600000) { logf_("取 %s 超时", J.asset); job_stop_src(); J.active = 0; }
     if (!J.active && now >= next_check) {
-        next_check = now + env_s("CUSTHUB_REL_CHECK_S", 600);
+        next_check = now + env_s("CUSTHUB_REL_CHECK_S", 30);   /* 每台 30 秒问一次发布清单(约 2KB); 网内看到更新的版本 3 秒内就去取(rel_saw) */
         check_now();
     }
 }
