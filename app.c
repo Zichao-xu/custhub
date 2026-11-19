@@ -156,8 +156,8 @@ void ls_text(buf_t *o)
     int64_t now = now_ms();
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i];
-        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "中继" : "节点",
-            r->addr, r->relays, r->status, r->ver, (long)((now - r->rx_ms) / 1000));
+        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "中继" : "节点",
+            r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000));
     }
 }
 

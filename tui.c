@@ -9,12 +9,13 @@
 #include <string.h>
 #include <stdarg.h>
 
-typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16], host[64]; int relay, rec, link, self; long age; } row_t;
+typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16], host[64], plat[24], os[64], model[64]; int relay, rec, link, self; long age; } row_t;
 typedef struct { char code[8], key[48], from[80], host[64], plat[24], ver[16]; } pend_t;
 
 static row_t RW[MAXM]; static int nrw;
+static void set_info(row_t *r, const char *mi);
 static pend_t PD[32]; static int npd;
-static char tdir[1200], tself[1200], me[64] = "?", info[200] = "", msg[600] = "";
+static char tdir[1200], tself[1200], me[64] = "?", info[200] = "", msg[600] = "", mykey[48] = "";
 static int unlocked, sel, top, rows = 24, cols = 80, msg_err;
 static int64_t t_ls, t_status, t_pend;
 static int watching; static char watch_base[1024]; static int64_t watch_end;
@@ -123,7 +124,10 @@ static void load_ls(void)
         if (!r) continue;
         if (sec == 1) r->link = 1;
         else if (sec == 2) {
-            char ad[64] = "", via[96] = "", st[128] = "", vr[16] = ""; long age = 0;
+            char ad[64] = "", via[96] = "", st[128] = "", vr[16] = "", mi[200] = ""; long age = 0;
+            const char *mm = strstr(ln, "机器=");
+            if (mm) sscanf(mm + 7, "%199s", mi);
+            if (mi[0] && strcmp(mi, "-")) set_info(r, mi);
             const char *a = strstr(ln, "地址="), *b = strstr(ln, "挂在="), *c = strstr(ln, "状态="), *d = strstr(ln, "版本=");
             if (a) sscanf(a + 7, "%63s", ad);
             if (b) sscanf(b + 7, "%95s", via);
@@ -134,7 +138,7 @@ static void load_ls(void)
             snprintf(r->via, sizeof r->via, "%s", via); snprintf(r->status, sizeof r->status, "%s", st); snprintf(r->ver, sizeof r->ver, "%s", vr);
         }
     }
-    for (int i = 0; i < nrw; i++) if (!strcmp(RW[i].name, me)) { RW[i].self = 1; snprintf(RW[i].ver, sizeof RW[i].ver, "%s", CH_VERSION); }
+    for (int i = 0; i < nrw; i++) if (!strcmp(RW[i].name, me) || (RW[i].key[0] && !strcmp(RW[i].key, mykey))) { RW[i].self = 1; snprintf(RW[i].ver, sizeof RW[i].ver, "%s", CH_VERSION); set_info(&RW[i], my_info()); }
     if (wasn[0]) for (int i = 0; i < nrw; i++) if (!strcmp(RW[i].name, wasn)) sel = i;
     t_ls = now_ms();
 }
@@ -176,6 +180,18 @@ static void load_pending(void)
     }
 }
 
+/* 平台|机器名|系统|机型(_ 是空格) → 各列 */
+static void set_info(row_t *r, const char *mi)
+{
+    char b[200]; snprintf(b, sizeof b, "%s", mi);
+    for (char *c = b; *c; c++) if (*c == '_') *c = ' ';
+    char *f[4] = { b, "", "", "" }; int k = 1;
+    for (char *c = b; *c && k < 4; c++) if (*c == '|') { *c = 0; f[k++] = c + 1; }
+    snprintf(r->plat, sizeof r->plat, "%s", f[0]);
+    if (f[1][0]) snprintf(r->host, sizeof r->host, "%s", f[1]);
+    snprintf(r->os, sizeof r->os, "%s", f[2]); snprintf(r->model, sizeof r->model, "%s", f[3]);
+}
+
 /* ---------- 画 ---------- */
 static int online(const row_t *r) { return r->self || r->link || (r->rec && r->age < 150 && strstr(r->status, ":up")); }
 
@@ -190,7 +206,9 @@ static void draw(void)
     snprintf(head, sizeof head, " custhub %s · 本机 %s · 主钥匙: %s%s", CH_VERSION, me, unlocked ? "已解锁" : "未解锁",
              watching ? " · 等新机器报到…" : "");
     out("\x1b[7m"); cell(head, cols); out("\x1b[0m\r\n");
-    out("\x1b[1m"); cell("  名字          状态    机器名            版本      连接", cols); out("\x1b[0m\r\n");
+    int wc = cols - 16 - 6 - 18 - 9;                     /* 系统 / 机型 / 连接 分剩下的宽度 */
+    int wos = wc * 30 / 100, wmo = wc * 30 / 100, wcn = wc - wos - wmo;
+    out("\x1b[1m"); cell("  名字", 16); cell("状态", 6); cell("机器名", 18); cell("系统", wos); cell("机型", wmo); cell("版本", 9); cell("连接", wcn); out("\x1b[0m\r\n");
     int nitems = nrw + (unlocked ? npd : 0);
     if (sel >= nitems) sel = nitems ? nitems - 1 : 0;
     int area = rows - 7 - (unlocked && npd ? 1 : 0);
@@ -209,10 +227,11 @@ static void draw(void)
             if (r->link && r->relay) strcat(conn, ")");
             out(i == sel ? "\x1b[7m" : "");
             snprintf(line, sizeof line, "%s %-13s", i == sel ? ">" : " ", r->name); cell(line, 16);
-            out(i == sel ? "" : on ? "\x1b[32m" : "\x1b[2m"); cell(r->self ? "本机" : on ? "在线" : "离线", 8); out(i == sel ? "" : "\x1b[0m");
-            cell(r->host[0] ? r->host : "-", 18);
-            cell(r->ver[0] ? r->ver : "-", 10);
-            cell(conn, cols - 52);
+            out(i == sel ? "" : on ? "\x1b[32m" : "\x1b[2m"); cell(r->self ? "本机" : on ? "在线" : "离线", 6); out(i == sel ? "" : "\x1b[0m");
+            char osb[100]; snprintf(osb, sizeof osb, "%s", r->os[0] ? r->os : r->plat[0] ? r->plat : "-");
+            cell(r->host[0] ? r->host : "-", 18); cell(osb, wos); cell(r->model[0] ? r->model : "-", wmo);
+            cell(r->ver[0] ? r->ver : "-", 9);
+            cell(conn, wcn);
             out("\x1b[0m\r\n");
         } else {
             pend_t *p = &PD[i - nrw];
@@ -226,8 +245,8 @@ static void draw(void)
     char det[400] = "";
     if (sel < nrw && nrw) {
         row_t *r = &RW[sel];
-        snprintf(det, sizeof det, " %s  接入码 %s  %s%s  公钥 %.12s…%s%s", r->name, r->code, r->relay ? "种子中继 " : "节点", r->relay ? r->addr : "",
-                 r->key, r->rec ? (r->self ? "" : "  ") : "", "");
+        snprintf(det, sizeof det, " %s  接入码 %s  %s%s  %s  公钥 %.12s…%s", r->name, r->code, r->relay ? "种子中继 " : "节点", r->relay ? r->addr : "",
+                 r->plat[0] ? r->plat : "", r->key, r->rec && !r->self ? "  " : "");
         if (r->rec && !r->self) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "最近 %lds 前", r->age); }
     } else if (sel >= nrw && sel - nrw < npd) {
         pend_t *p = &PD[sel - nrw]; snprintf(det, sizeof det, " 待批准 %s  机器名 %s  公钥 %.12s…", p->code, p->host, p->key);

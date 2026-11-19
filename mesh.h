@@ -63,7 +63,7 @@ typedef struct { char name[32]; uint8_t ed[32], x[32]; int relay; char addr[64],
 typedef struct { long ver; int n; member_t m[MAXM]; char text[MAXTEXT]; size_t tlen; } trust_t;
 typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
-    int relay; char addr[64], relays[160], status[320], ver[16];
+    int relay; char addr[64], relays[160], status[320], ver[16], info[200];   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
     char line[800];
 } rec_t;
 
@@ -239,7 +239,8 @@ int  cmd_join3(int argc, char **argv);
 int  cmd_run(int argc, char **argv);
 void path_ensure(void);
 int  cmd_user(int argc, char **argv);
-int  cmd_tui(const char *dir);                           /* tui.c: custhub 不带参数的终端界面 */                     /* custhub user add|del|ls */                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
+int  cmd_tui(const char *dir);
+const char *my_info(void);                               /* disc.c: 本机 平台|机器名|系统|机型 */                           /* tui.c: custhub 不带参数的终端界面 */                     /* custhub user add|del|ls */                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
 int  cmd_remove3(int argc, char **argv);
 const char *node_default(void);                          /* 默认节点目录(用户模式装过就用它) */
 #define PASSSLOTS 8              /* 本机存的通行证: <目录>/pass, pass.1 … pass.7 */

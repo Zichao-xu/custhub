@@ -61,8 +61,8 @@ o=$(K approve "$cy" 2>&1); echo "$o" | grep -q "已批准 A-1(接入码 $cy, 机
 K ls | grep -qE "^  A-1 +$cy  host-y " && ok "key ls 有机器名一列" || ng "ls: $(K ls)"
 grep -q "^node A-1 $(cat "$T/y.pub") host=host-y$" <(K ls >/dev/null; $M ctl "$T/adm" TRUST) && ok "名单行: node A-1 <公钥> host=host-y" || ng "名单: $($M ctl "$T/adm" TRUST | grep A-1)"
 o=$(K rename A-1 yy 2>&1); echo "$o" | grep -q "A-1 改名为 yy" && K ls | grep -qE "^  yy +$cy  host-y " && ok "rename: 改名, 机器名备注跟着" || ng "rename: $o / $(K ls)"
-wait_for 15 grep -q "名字 yy" "$T/y.log"
-grep -q "名字 yy" "$T/y.log" && ok "y 知道自己改叫 yy 了" || ng "y 日志: $(grep 名单 "$T/y.log" | tail -2)"
+wait_for 15 grep -qE "本机改名: A-1 → yy|名字 yy" "$T/y.log"
+grep -qE "本机改名: A-1 → yy|名字 yy" "$T/y.log" && ok "y 不用重启就知道自己改叫 yy 了" || ng "y 日志: $(grep 名单 "$T/y.log" | tail -2)"
 o=$(K approve "$cz" 2>&1); echo "$o" | grep -q "已批准 A-2" && ok "A-1 改名后不再复用: 下一台是 A-2" || ng "号复用了: $o"
 
 echo "== 3 种子 / 发布清单 / 通行证"

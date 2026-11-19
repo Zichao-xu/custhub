@@ -1006,6 +1006,33 @@ const char *p_invoker(void)
 
 int p_elevate(int argc, char **argv) { (void)argc; (void)argv; return -1; }   /* 弹 UAC 的话输出在另一个窗口: 不做, 提示用管理员终端 */
 
+/* ---------- 本机是什么机器 ---------- */
+static void reg_str(HKEY root, const WCHAR *sub, const WCHAR *name, char *out, size_t cap)
+{
+    out[0] = 0; WCHAR w[256]; DWORD sz = sizeof w - sizeof(WCHAR), type = 0; HKEY k;
+    if (RegOpenKeyExW(root, sub, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &k)) return;
+    if (!RegQueryValueExW(k, name, NULL, &type, (BYTE *)w, &sz) && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+        w[sz / sizeof(WCHAR)] = 0;
+        WideCharToMultiByte(CP_UTF8, 0, w, -1, out, (int)cap, NULL, NULL);
+    }
+    RegCloseKey(k);
+}
+void p_machine(char *os, size_t ocap, char *model, size_t mcap)
+{
+    const WCHAR *cv = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+    char prod[128], disp[32], build[16];
+    reg_str(HKEY_LOCAL_MACHINE, cv, L"ProductName", prod, sizeof prod);
+    reg_str(HKEY_LOCAL_MACHINE, cv, L"DisplayVersion", disp, sizeof disp);
+    reg_str(HKEY_LOCAL_MACHINE, cv, L"CurrentBuild", build, sizeof build);
+    char *w10 = strstr(prod, "Windows 10");
+    if (w10 && atoi(build) >= 22000) w10[9] = '1';     /* Win11 的 ProductName 还写着 Windows 10 */
+    snprintf(os, ocap, "%s%s%s", prod, disp[0] ? " " : "", disp);
+    char ven[96], mod[96];
+    reg_str(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", L"SystemManufacturer", ven, sizeof ven);
+    reg_str(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", L"SystemProductName", mod, sizeof mod);
+    snprintf(model, mcap, "%s%s%s", ven, ven[0] && mod[0] ? " " : "", mod);
+}
+
 int p_rmtree(const char *path)
 {
     DWORD a = GetFileAttributesA(path);

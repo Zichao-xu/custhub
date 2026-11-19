@@ -117,6 +117,10 @@ int mtrust_apply(const char *text, size_t len, const char *from)
         logf_("已被批准(名单 v%ld 里有本机, 名字 %s), 重新接入", G.trust.ver, G.name);
         for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE && G.c[i].initiator && !G.c[i].guest && !G.c[i].probe_for) conn_close(i, "被批准, 重新接入");
     }
+    else if (member_by_ed(G.id.ed) && strcmp(G.name, member_by_ed(G.id.ed)->name)) {   /* 被改名了: 本机跟着改 */
+        logf_("本机改名: %s → %s", G.name, member_by_ed(G.id.ed)->name);
+        snprintf(G.name, sizeof G.name, "%s", member_by_ed(G.id.ed)->name);
+    }
     for (int i = 0; i < MAXC; i++) {
         conn_t *c = &G.c[i];
         if (c->state == C_FREE || c->closing || (c->guest && !c->initiator)) continue;   /* 访客链路不靠名单 */
@@ -163,6 +167,26 @@ void targets_sync(void)
     }
 }
 
+/* 本机是什么机器: 平台|机器名|系统|机型, 只算一次; 空格换成 _、逗号换成 .(记录里按空格分段) */
+const char *my_info(void)
+{
+    static char inf[120];                               /* 记录一整行最长 800, 留够余量 */
+    if (inf[0]) return inf;
+    char host[64], os[96], model[96], raw[400];
+    p_hostname(host, sizeof host); p_machine(os, sizeof os, model, sizeof model);
+    snprintf(raw, sizeof raw, "%s|%.40s|%.50s|%.50s", CH_PLAT, host, os, model);
+    size_t o = 0;
+    for (const char *c = raw; *c && o + 1 < sizeof inf; c++) {
+        char ch = *c;
+        if (ch == ' ' || ch == '\t') ch = '_';
+        if (ch == ',') ch = '.';                          /* 逗号是记录里中继列表的分隔符(Mac15,6 → Mac15.6) */
+        if (ch == '\r' || ch == '\n' || (unsigned char)ch < 32) continue;
+        inf[o++] = ch;
+    }
+    inf[o] = 0;
+    return inf;
+}
+
 /* ---------- 位置记录 ---------- */
 static int rec_parse(const char *line, size_t n, rec_t *r)
 {
@@ -185,6 +209,8 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
     snprintf(r->addr, sizeof r->addr, "%s", f[4]);
     snprintf(r->relays, sizeof r->relays, "%s", f[5]);
     snprintf(r->status, sizeof r->status, "%s", f[6]);
+    char *bar = strchr(f[7], '|');                       /* 版本|平台|机器名|系统|机型: 老版本只认前面的版本号 */
+    if (bar) { *bar = 0; snprintf(r->info, sizeof r->info, "%s", bar + 1); }
     snprintf(r->ver, sizeof r->ver, "%s", f[7]);
     memcpy(r->line, line, n); r->line[n] = 0;
     return 0;
@@ -239,8 +265,8 @@ void disc_tick(void)
     }
     if (any_up) G.last_up_ms = now;
     b64_encode(G.id.ed, 32, b64);
-    snprintf(body, sizeof body, "%s %s %s %s %s", G.me_relay ? "relay" : "node",
-             G.me_relay ? relay_addr() : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION);
+    snprintf(body, sizeof body, "%s %s %s %s %s|%s", G.me_relay ? "relay" : "node",
+             G.me_relay ? relay_addr() : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info());
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {
         uint64_t wall = (uint64_t)wall_ms();
         G.myseq = wall > G.myseq ? wall : G.myseq + 1;

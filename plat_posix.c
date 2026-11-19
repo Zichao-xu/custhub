@@ -27,6 +27,9 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 
 static int would(int e) { return e == EAGAIN || e == EWOULDBLOCK || e == EINTR; }
 
@@ -856,6 +859,47 @@ int p_elevate(int argc, char **argv)
     fflush(stdout); fflush(stderr);
     execvp("sudo", av);
     return -1;
+}
+
+/* ---------- 本机是什么机器 ---------- */
+#ifndef __APPLE__
+static void read_line_file(const char *p, char *out, size_t cap)
+{
+    out[0] = 0; FILE *f = fopen(p, "r"); if (!f) return;
+    if (fgets(out, (int)cap, f)) { size_t n = strcspn(out, "\r\n"); out[n] = 0; while (n && out[n - 1] == ' ') out[--n] = 0; }
+    fclose(f);
+}
+static void kv_file(const char *p, const char *key, char *out, size_t cap)   /* KEY="value" 这种文件 */
+{
+    out[0] = 0; FILE *f = fopen(p, "r"); if (!f) return;
+    char l[400]; size_t kl = strlen(key);
+    while (fgets(l, sizeof l, f)) if (!strncmp(l, key, kl) && l[kl] == '=') {
+        char *v = l + kl + 1; v[strcspn(v, "\r\n")] = 0;
+        size_t n = strlen(v); if (n && (v[0] == '"' || v[0] == '\'')) { v++; n -= 2; if ((long)n < 0) n = 0; v[n] = 0; }
+        snprintf(out, cap, "%s", v); break;
+    }
+    fclose(f);
+}
+#endif
+void p_machine(char *os, size_t ocap, char *model, size_t mcap)
+{
+    os[0] = model[0] = 0;
+#ifdef __APPLE__
+    char v[64] = "", m[96] = ""; size_t n = sizeof v;
+    if (!sysctlbyname("kern.osproductversion", v, &n, NULL, 0)) snprintf(os, ocap, "macOS %s", v);
+    n = sizeof m;
+    if (!sysctlbyname("hw.model", m, &n, NULL, 0)) snprintf(model, mcap, "Apple %s", m);
+#else
+    if (is_file("/etc/openwrt_release")) kv_file("/etc/openwrt_release", "DISTRIB_DESCRIPTION", os, ocap);
+    if (!os[0]) kv_file("/etc/os-release", "PRETTY_NAME", os, ocap);
+    read_line_file("/tmp/sysinfo/model", model, mcap);                     /* OpenWrt: 路由器型号 */
+    if (!model[0]) read_line_file("/proc/device-tree/model", model, mcap);  /* ARM 板子 */
+    if (!model[0]) {
+        char ven[64], prod[64]; read_line_file("/sys/devices/virtual/dmi/id/sys_vendor", ven, sizeof ven);
+        read_line_file("/sys/devices/virtual/dmi/id/product_name", prod, sizeof prod);
+        if (prod[0]) snprintf(model, mcap, "%s%s%s", ven, ven[0] ? " " : "", prod);
+    }
+#endif
 }
 
 int p_rmtree(const char *path)
