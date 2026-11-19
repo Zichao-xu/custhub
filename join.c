@@ -153,7 +153,15 @@ int cmd_join3(int argc, char **argv)
     if (!repo) repo = srepo[0] ? srepo : NULL;
 
     if (p_self_path(self, sizeof self)) { fprintf(stderr, "找不到本程序的路径\n"); return 1; }
-    if (strcmp(self, exe) && copy_file(self, exe)) { fprintf(stderr, "装不进 %s(旧的还在跑? 先 custhub remove)\n", exe); return 1; }
+    if (strcmp(self, exe) && copy_file(self, exe)) {
+        /* 重复执行: 旧的还在跑(Windows 不让覆盖运行中的程序, 但让改名) → 挪开再放; 下面注册服务时会停掉旧的 */
+        char aside[1300]; snprintf(aside, sizeof aside, "%s.old", exe);   /* 和升级用同一个名字: 新版转正时顺手删掉 */
+        remove(aside);
+        int moved = !p_replace(exe, aside);
+        if (!moved) { snprintf(aside, sizeof aside, "%s.old.%lld", exe, (long long)wall_ms()); moved = !p_replace(exe, aside); }   /* .old 也被占着 */
+        if (!moved || copy_file(self, exe)) { fprintf(stderr, "装不进 %s(旧的还在跑? 先 custhub remove)\n", exe); return 1; }
+        printf("  旧程序还在运行, 挪到 %s\n", aside);
+    }
     char how[400];
     if (!getenv("CUSTHUB_HOME") || getenv("CUSTHUB_PATH_DIR")) {
         if (p_path_link(exe, 1, how, sizeof how)) printf("  没能加进 PATH: %s(可以用全路径 %s)\n", how, exe);
