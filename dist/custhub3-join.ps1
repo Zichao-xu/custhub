@@ -48,5 +48,9 @@ try {
     if ($got -ne $want) { throw (M '56iL5bqP55qEIHNoYTUxMiDlkozlj5HluIPmuIXljZXlr7nkuI3kuIosIOS4jeijhQ==') }
     $extra = @()
     if ($env:CUSTHUB_JOIN_ARGS) { $extra = $env:CUSTHUB_JOIN_ARGS -split ' ' }
-    & "$t\custhub.exe" join --seed "$t\seed" @extra
-} finally { Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue }
+    if ($PSVersionTable.PSVersion.Major -ge 3) { & "$t\custhub.exe" join --seed "$t\seed" @extra }
+    else {   # PowerShell 2.0 会截住程序的输出、按本机代码页再解一遍(中文变乱码): 让程序直接写控制台
+        $al = 'join --seed "' + $t + '\seed"'; foreach ($e in $extra) { $al = $al + ' ' + $e }
+        Start-Process -FilePath "$t\custhub.exe" -ArgumentList $al -NoNewWindow -Wait
+    }
+} finally { if ($t) { Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue } }
