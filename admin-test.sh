@@ -77,7 +77,7 @@ mkdir -p "$T/g1"; $M keygen "$T/g1" >"$T/g1.pub"
 printf 'custhub-mesh-trust 1\nrelay seed1 %s 127.0.0.1:%s\nnode boss %s\n--end--\n' "$(cat "$T/r.pub")" $PR "$(cat "$T/g1.pub")" >"$T/body"
 $M key --dir "$T/fresh" sign-trust "$T/body" --master "$(cut -d' ' -f1,2 "$T/master.pub")" --out "$T/gtrust" 2>/dev/null && head -1 "$T/gtrust" | grep -q "custhub-mesh-trust 1" && ok "sign-trust: 签第一份名单" || ng "sign-trust 失败"
 $M key --dir "$T/fresh" seed --trust "$T/gtrust" --master "$(cut -d' ' -f1,2 "$T/master.pub")" --github o/r --out "$T/gseed" 2>/dev/null && grep -q "^relay seed1 " "$T/gseed" && ok "seed --trust: 从名单出种子" || ng "seed 失败"
-o=$(CUSTHUB_HOME=$T/ghome CUSTHUB_SVC_DRY=1 CUSTHUB_SVC_KIND=systemd $M join --seed "$T/gseed" --wait 1 2>&1)
+o=$(CUSTHUB_CTL=127.0.0.1:$((base+30)) CUSTHUB_HOME=$T/ghome CUSTHUB_SVC_DRY=1 CUSTHUB_SVC_KIND=systemd $M join --seed "$T/gseed" --wait 1 2>&1)
 echo "$o" | grep -q "接入码" && ok "拿这份种子能接入" || ng "join: $o"
 [ -f "$T/ghome/node/dry/pid" ] && kill "$(cat "$T/ghome/node/dry/pid")" 2>/dev/null
 

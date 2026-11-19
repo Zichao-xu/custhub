@@ -82,24 +82,35 @@ D=$T/eng
 ssh-keygen -q -Y sign -f "$T/master" -n custhub-mesh-trust "$T/tdata" 2>/dev/null; cat "$T/tdata" "$T/tdata.sig" >"$D/trust"
 printf 'master %s\nctl 127.0.0.1:1\n' "$(cat "$T/master.pub")" >"$D/conf"
 NOWR=$(date +%s)
-o=$($M pass "$D" --to a --svc sh 2>&1); echo "$o" | grep -q "没有主钥匙" && ok "agent 里没主钥匙: 签不了($o)" || ng "没主钥匙也签了: $o"
+o=$($M key --dir "$D" pass --to a --svc sh 2>&1); echo "$o" | grep -q "没有主钥匙" && ok "agent 里没主钥匙: 签不了($o)" || ng "没主钥匙也签了: $o"
 ssh-add -q "$T/other" 2>/dev/null
-o=$($M pass "$D" --to a --svc sh 2>&1); echo "$o" | grep -q "没有主钥匙" && ok "agent 里只有别的钥匙: 签不了" || ng "拿别的钥匙签了: $o"
+o=$($M key --dir "$D" pass --to a --svc sh 2>&1); echo "$o" | grep -q "没有主钥匙" && ok "agent 里只有别的钥匙: 签不了" || ng "拿别的钥匙签了: $o"
 ssh-add -q "$T/master" 2>/dev/null
-$M pass "$D" --to a,b --svc "sh port:22" 2>"$T/err" && [ -s "$D/pass" ] && ok "不写 --for: 发给本机, 写进 目录/pass($(cat "$T/err"))" || ng "签发失败: $(cat "$T/err")"
+$M key --dir "$D" pass --to a,b --svc "sh port:22" 2>"$T/err" && [ -s "$D/pass" ] && ok "不写 --for: 发给本机, 写进 目录/pass($(cat "$T/err"))" || ng "签发失败: $(cat "$T/err")"
 chk ok   "签出来的通行证模块认: 进 b 用 sh"   "$D/pass" "$ENG" "$B" sh $NOWR
 chk 这项服务 "签出来的: svc 照写(不含 3389)" "$D/pass" "$ENG" "$A" port:3389 $NOWR
 chk 已过期 "签出来的: 默认 2 小时"            "$D/pass" "$ENG" "$A" sh $((NOWR + 7200 + 301))
 sed '/^--end--$/q' "$D/pass" >"$T/pbody"; sed -n '/BEGIN SSH SIGNATURE/,$p' "$D/pass" >"$T/pbody.sig"
 echo "master $(cut -d' ' -f1,2 "$T/master.pub")" >"$T/allowed"
 ssh-keygen -Y verify -f "$T/allowed" -I master -n custhub-pass -s "$T/pbody.sig" <"$T/pbody" >/dev/null 2>&1 && ok "ssh-keygen -Y verify 也认(格式兼容)" || ng "ssh-keygen 不认签出来的通行证"
-$M pass "$D" --for "$A" --to b --svc "port:*" --hours 0.5 >"$T/pa" 2>/dev/null && chk ok "--for 别人(公钥): 打印到标准输出" "$T/pa" "$A" "$B" port:80 $NOWR || ng "--for 签发失败"
+$M key --dir "$D" pass --for "$A" --to b --svc "port:*" --hours 0.5 --out - >"$T/pa" 2>/dev/null && chk ok "--for 别人(公钥): 打印到标准输出" "$T/pa" "$A" "$B" port:80 $NOWR || ng "--for 签发失败"
 chk 已过期 "--hours 0.5 生效"                 "$T/pa" "$A" "$B" port:80 $((NOWR + 1800 + 301))
 mkdir -p "$T/g0"; G=$($M keygen "$T/g0")
-$M pass "$D" --for "$G" --to a --svc sh --out "$T/pg" 2>/dev/null && chk ok "--for 名单外的公钥(访客)" "$T/pg" "$G" "$A" sh $NOWR || ng "给访客签发失败"
-o=$($M pass "$D" --to a --svc sh --hours 25 2>&1);  echo "$o" | grep -q "最长 1 天" && ok "--hours 25 被拒" || ng "--hours 25 没拒: $o"
-o=$($M pass "$D" --to nobody --svc sh 2>&1);       echo "$o" | grep -q "名单里没有这台" && ok "--to 名单外的机器被拒" || ng "--to 名单外没拒: $o"
-o=$($M pass "$D" --to a --svc "ssh" 2>&1);         echo "$o" | grep -q "svc 不对" && ok "--svc 写错被拒" || ng "--svc 写错没拒: $o"
+$M key --dir "$D" pass --for "$G" --to a --svc sh --out "$T/pg" 2>/dev/null && chk ok "--for 名单外的公钥(访客)" "$T/pg" "$G" "$A" sh $NOWR || ng "给访客签发失败"
+o=$($M key --dir "$D" pass --to a --svc sh --hours 25 2>&1);  echo "$o" | grep -q "最长 1 天" && ok "--hours 25 被拒" || ng "--hours 25 没拒: $o"
+o=$($M key --dir "$D" pass --to nobody --svc sh 2>&1);       echo "$o" | grep -q "名单里没有这台" && ok "--to 名单外的机器被拒" || ng "--to 名单外没拒: $o"
+o=$($M key --dir "$D" pass --to a --svc "ssh" 2>&1);         echo "$o" | grep -q "svc 不对" && ok "--svc 写错被拒" || ng "--svc 写错没拒: $o"
+
+echo "== 本机存几张、custhub pass 装上 / 列出"
+$M key --dir "$D" pass --to b --svc "port:22" 2>/dev/null
+[ -s "$D/pass" ] && [ -s "$D/pass.1" ] && ok "再签一张不同范围的: 并存(pass、pass.1), 不顶掉前一张" || ng "存放: $(ls "$D")"
+$M key --dir "$D" pass --to b --svc "port:22" --hours 3 2>/dev/null
+[ ! -e "$D/pass.2" ] && ok "同范围再签: 替换原来那张, 不多占位置" || ng "多占了: $(ls "$D")"
+o=$($M pass --dir "$D"); echo "$o" | grep -q "进 a,b, 用 sh port:22, 还剩 [12] 小时" && echo "$o" | grep -q "进 b, 用 port:22, 还剩 [23] 小时" && ok "custhub pass 列出两张、剩多久" || ng "列出: $(echo "$o" | tr "\n" "|")"
+(cd "$T" && $M key --dir "$D" pass --for a --to b 2>"$T/err") && [ -s "$T/a.pass" ] && grep -q "custhub pass a.pass" "$T/err" && ok "--for 名字: 存成 a.pass(默认 sh), 提示对方怎么装" || ng "--for a: $(cat "$T/err"); $(ls "$T")"
+cp "$D/trust" "$T/a/trust"; cp "$D/conf" "$T/a/conf"
+o=$($M pass --dir "$T/a" "$T/a.pass"); echo "$o" | grep -q "已装上: 进 b, 用 sh" && echo "$o" | grep -q "现在可以: custhub sh b" && [ -s "$T/a/pass" ] && ok "custhub pass a.pass: 装上, 告诉下一步" || ng "装: $o"
+o=$($M pass --dir "$T/a" "$D/pass" 2>&1); echo "$o" | grep -q "不是发给本机的" && ok "别人的通行证装不上" || ng "装别人的: $o"
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail = 0 ]

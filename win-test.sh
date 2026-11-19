@@ -12,7 +12,7 @@ B=$(mktemp -d); trap 'rm -rf "$B"' EXIT
 V=vendor
 zig cc -target x86_64-windows-gnu -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter -DCH_VERSION='"0.0.0"' -DCH_PLAT='"win-x64"' -o "$B/mesh.exe" \
   mesh_main.c main.c util.c b64.c noise.c link.c hop.c disc.c qual.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c plat_win.c \
-  sshsig.c $V/monocypher.c $V/monocypher-ed25519.c -lws2_32 -ladvapi32 -lshell32 || exit 1
+  sshsig.c $V/monocypher.c $V/monocypher-ed25519.c -lws2_32 -ladvapi32 -lshell32 -luser32 || exit 1
 rm -f "$B"/*.pdb
 ssh-keygen -q -t ed25519 -N '' -C master -f "$B/master"
 for n in r e b; do mkdir -p "$B/$n"; $M keygen "$B/$n" >"$B/$n.pub"; done

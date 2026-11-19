@@ -93,6 +93,9 @@ void p_sleep_ms(int ms);
 int  p_service_install(const char *exe, const char *dir, char *why, size_t wcap);
 int  p_service_remove(const char *dir, char *why, size_t wcap);
 const char *p_service_kind(void);
+/* 命令加进 PATH(on=1) / 撤掉(on=0): POSIX 在 /usr/local/bin(OpenWrt /usr/bin; 用户模式 ~/.local/bin + shell 配置)放链接,
+ * Windows 把 exe 所在目录加进 PATH。how 写做了什么或为什么没做; 0 成功。演练模式不碰系统 */
+int  p_path_link(const char *exe, int on, char *how, size_t cap);
 int  p_rmtree(const char *path);            /* 删整个目录; 删不掉的(Windows 上正在跑的程序)安排重启后删 */           /* "systemd" / "procd" / "launchd" / "task"(Windows 计划任务) / "" */
 
 /* ---------- 命令行 ---------- */

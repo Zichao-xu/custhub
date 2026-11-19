@@ -853,6 +853,60 @@ int p_service_remove(const char *dir, char *why, size_t wcap)
     return 0;
 }
 
+/* 命令加进 PATH: 把 exe 所在目录加进系统 PATH(用户模式: 当前用户的 PATH), 广播一下让新开的终端看得到
+ * 节点目录只给 SYSTEM / Administrators, 所以要在"以管理员身份运行"的终端里用(同 Linux 上 sudo)。演练模式不碰注册表 */
+static int path_has(const WCHAR *path, const WCHAR *d, size_t *at, size_t *len)
+{
+    size_t dl = wcslen(d);
+    for (const WCHAR *p = path; *p; ) {
+        const WCHAR *e = wcschr(p, L';'); size_t k = e ? (size_t)(e - p) : wcslen(p);
+        size_t kk = k; while (kk && p[kk - 1] == L'\\') kk--;
+        if (kk == dl && !_wcsnicmp(p, d, dl)) { *at = (size_t)(p - path); *len = k; return 1; }
+        p += k; if (*p) p++;
+    }
+    return 0;
+}
+
+int p_path_link(const char *exe, int on, char *how, size_t cap)
+{
+    how[0] = 0;
+    if (wdry()) return 0;
+    char dir[MAX_PATH + 32]; snprintf(dir, sizeof dir, "%s", exe);
+    char *sl = strrchr(dir, '\\'); if (!sl) { snprintf(how, cap, "认不出 %s 所在目录", exe); return -1; }
+    *sl = 0;
+    WCHAR *wd = wide(dir); if (!wd) return -1;
+    HKEY root = user_mode ? HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE;
+    const WCHAR *sub = user_mode ? L"Environment" : L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+    HKEY k; int r = -1;
+    if (RegOpenKeyExW(root, sub, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &k)) { snprintf(how, cap, "打不开注册表里的环境变量"); free(wd); return -1; }
+    static WCHAR cur[32768], nw[32768 + MAX_PATH + 4];
+    DWORD type = REG_EXPAND_SZ, sz = sizeof cur - sizeof(WCHAR);
+    LONG q = RegQueryValueExW(k, L"Path", NULL, &type, (BYTE *)cur, &sz);
+    if (q == ERROR_FILE_NOT_FOUND) { cur[0] = 0; type = REG_EXPAND_SZ; }
+    else if (q || (type != REG_SZ && type != REG_EXPAND_SZ)) { snprintf(how, cap, "读不了 PATH"); goto out; }
+    else cur[sz / sizeof(WCHAR)] = 0;
+    size_t at, len; int has = path_has(cur, wd, &at, &len), changed = 0;
+    if (on && !has) {
+        size_t cl = wcslen(cur);
+        while (cl && cur[cl - 1] == L';') cur[--cl] = 0;
+        _snwprintf(nw, sizeof nw / sizeof nw[0], L"%ls%ls%ls", cur, cl ? L";" : L"", wd); nw[sizeof nw / sizeof nw[0] - 1] = 0;
+        changed = 1;
+    } else if (!on && has) {
+        size_t e = at + len; if (cur[e] == L';') e++; else if (at && cur[at - 1] == L';') at--;
+        wcsncpy(nw, cur, at); nw[at] = 0; wcscat(nw, cur + e);
+        changed = 1;
+    }
+    if (changed) {
+        if (RegSetValueExW(k, L"Path", 0, type, (const BYTE *)nw, (DWORD)((wcslen(nw) + 1) * sizeof(WCHAR)))) { snprintf(how, cap, "写不了 PATH"); goto out; }
+        DWORD_PTR res; SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment", SMTO_ABORTIFHUNG, 3000, &res);
+    }
+    snprintf(how, cap, on ? "%s 加进了 PATH(新开的管理员终端生效)" : "%s 移出了 PATH", dir);
+    r = 0;
+out:
+    RegCloseKey(k); free(wd);
+    return r;
+}
+
 int p_rmtree(const char *path)
 {
     DWORD a = GetFileAttributesA(path);

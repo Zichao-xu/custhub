@@ -15,7 +15,7 @@ ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
 base=$((20000 + RANDOM % 20000)); PR=$base
-export CUSTHUB_HOME=$T/home CUSTHUB_SVC_DRY=1 CUSTHUB_MESH_PENDING_S=2
+CP=$((base+20)); export CUSTHUB_HOME=$T/home CUSTHUB_SVC_DRY=1 CUSTHUB_MESH_PENDING_S=2 CUSTHUB_CTL=127.0.0.1:$CP CP   # 控制口避开本机真在跑的 7481
 ssh-keygen -q -t ed25519 -N '' -C master -f "$T/master"
 mkdir -p "$T/r"; $M keygen "$T/r" >"$T/r.pub"
 sign(){ local v=$1; shift; { echo "custhub-mesh-trust $v"; printf '%s\n' "$@"; echo "--end--"; } >"$T/data"; rm -f "$T/data.sig"
@@ -33,7 +33,7 @@ wait_for 15 grep -q "接入码" "$T/join.out"
 code=$(sed -n 's/^  接入码: \([0-9A-Z]\{3\}-[0-9A-Z]\{3\}\)$/\1/p' "$T/join.out")
 [ -n "$code" ] && [ "$code" = "$($M code "$T/home/node")" ] && ok "显示接入码 $code(和节点公钥算出来的一致)" || ng "接入码: [$code] $(cat "$T/join.out")"
 [ -x "$T/home/custhub" ] && cmp -s "$M" "$T/home/custhub" && ok "程序装进安装目录" || ng "安装目录里没有程序"
-grep -q "^github example/custhub$" "$T/home/node/conf" && grep -q "^ctl 127.0.0.1:7481$" "$T/home/node/conf" && grep -q "^upnp off$" "$T/home/node/conf" && grep -q "^relay off$" "$T/home/node/conf" && ok "conf: 种子里的仓库、v3 控制口 7481, 本机手动加的 upnp / relay 留着" || ng "conf: $(cat "$T/home/node/conf")"
+grep -q "^github example/custhub$" "$T/home/node/conf" && grep -q "^ctl 127.0.0.1:$CP$" "$T/home/node/conf" && grep -q "^upnp off$" "$T/home/node/conf" && grep -q "^relay off$" "$T/home/node/conf" && ok "conf: 种子里的仓库、控制口, 本机手动加的 upnp / relay 留着" || ng "conf: $(cat "$T/home/node/conf")"
 grep -qF "ExecStart=\"$T/home/custhub\" run \"$T/home/node\"" "$T/home/node/dry/custhub.service" && grep -q "^Restart=always" "$T/home/node/dry/custhub.service" && ok "systemd 服务文件: 跑 custhub run, 挂了自动拉起" || ng "systemd: $(cat "$T/home/node/dry/custhub.service" 2>&1)"
 NP=$($M pub "$T/home/node")
 wait_for 15 grep -qF "$NP" "$T/r/pending"
@@ -56,16 +56,22 @@ grep -qF "<string>$T/home/custhub</string><string>run</string><string>$T/home/no
 mode(){ stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }   # GNU / BSD
 [ "$(mode "$T/home/node")" = 700 ] && [ "$(mode "$T/home/node/node.key")" = 600 ] && ok "节点目录 0700、钥匙 0600" || ng "权限: $(ls -ld "$T/home/node" "$T/home/node/node.key")"
 [ "$(mode "$T/home/node/ctl.token")" = 600 ] && ok "控制口令牌 0600" || ng "令牌权限: $(ls -l "$T/home/node/ctl.token" 2>&1)"
-o=$(python3 -c 'import socket; s=socket.create_connection(("127.0.0.1",7481),3); s.sendall(b"LS\n"); print(s.recv(200).decode().strip())' 2>&1); echo "$o" | grep -q "令牌不对" && ok "不带令牌连控制口被拒: $o" || ng "控制口没令牌: [$o]"
+o=$(python3 -c 'import socket; s=socket.create_connection(("127.0.0.1",int(__import__("os").environ["CP"])),3); s.sendall(b"LS\n"); print(s.recv(200).decode().strip())' 2>&1); echo "$o" | grep -q "令牌不对" && ok "不带令牌连控制口被拒: $o" || ng "控制口没令牌: [$o]"
 
 echo "== 4 重复执行"
 CUSTHUB_SVC_KIND=systemd $M join --seed "$T/seed" --wait 15 >"$T/join2.out" 2>&1
 [ "$($M pub "$T/home/node")" = "$NP" ] && ok "节点钥匙不变" || ng "钥匙变了"
 grep -q "本机已在名单里(n1)" "$T/join2.out" && grep -q "^已接入: 名字 n1$" "$T/join2.out" && ok "已在名单里: 不用再批准, 直接已接入" || ng "再次 join: $(cat "$T/join2.out")"
 
+echo "== 4b 命令进 PATH(链接放到 CUSTHUB_PATH_DIR, 不碰系统)"
+CUSTHUB_PATH_DIR=$T/bin CUSTHUB_SVC_KIND=systemd $M join --seed "$T/seed" --wait 5 >"$T/join3.out" 2>&1
+[ "$(readlink "$T/bin/custhub")" = "$T/home/custhub" ] && "$T/bin/custhub" version | grep -q "^custhub " && grep -q "命令: custhub → $T/bin/custhub" "$T/join3.out" && ok "join 后 custhub 在 PATH 目录里(链到安装目录那份), 能直接跑" || ng "PATH: $(ls -l "$T/bin" 2>&1); $(grep 命令 "$T/join3.out")"
+o=$("$T/bin/custhub" help); echo "$o" | grep -q "custhub sh <机器>" && ! echo "$o" | grep -q "<目录>" && ok "help: 不用写目录" || ng "help: $o"
+
 echo "== 5 remove"
 pid=$(cat "$T/home/node/dry/pid")
-$M remove >"$T/rm.out" 2>&1
+CUSTHUB_PATH_DIR=$T/bin $M remove >"$T/rm.out" 2>&1
+[ ! -e "$T/bin/custhub" ] && ok "remove 撤掉了 PATH 里的链接" || ng "链接还在"
 sleep 1
 ! kill -0 "$pid" 2>/dev/null && ok "服务停了" || ng "守护还在"
 [ ! -e "$T/home" ] && ok "安装目录删了" || ng "安装目录还在: $(ls "$T/home" 2>&1)"

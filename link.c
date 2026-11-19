@@ -303,7 +303,7 @@ static void conn_write(int i)
         int pn = snprintf(pl, sizeof pl, "%s %s %s", HELLO, edb, c->probe_for ? "probe" : G.hello[0] ? G.hello : G.name);
         if (!member_by_ed(G.id.ed) && !c->probe_for) {                    /* 名单外: 有通行证就附上, 中继认了就以访客身份接入 */
             pl[pn++] = '\n';
-            int k = pass_load(pl + pn, sizeof pl - (size_t)pn);
+            int k = pass_load(NULL, NULL, pl + pn, sizeof pl - (size_t)pn);
             if (k) pn += k; else pn--;
         }
         long n = hs_write1(&c->hs, (const uint8_t *)pl, (size_t)pn, m1);

@@ -126,6 +126,14 @@ int cmd_join3(int argc, char **argv)
         else { fprintf(stderr, "用法: custhub join --github owner/name | --seed 文件 [--user] [--wait 秒]\n"
                                "  --user  用户模式(管理电脑): 装在自己家目录、用自己账号的登录项跑, 不要 root\n"); return 2; }
     }
+    static char crepo[100];
+    if (!seedf && !repo) {                              /* 重新接入 / 修复: 仓库取本机 conf 里的 github */
+        char cp[1300], ct[8192]; snprintf(cp, sizeof cp, "%s%sconf", node_default(), strncmp(CH_PLAT, "win", 3) ? "/" : "\\");
+        char *g = m_read(cp, ct, sizeof ct) > 0 ? strstr(ct, "github ") : NULL;
+        if (g && (g == ct || g[-1] == '\n') && sscanf(g + 7, "%99s", crepo) == 1) repo = crepo;
+        else { fprintf(stderr, "本机还没接入过: 第一次接入用一键命令(curl … custhub3-join.sh | sh), 或 custhub join --github owner/name\n"); return 2; }
+        if (strstr(node_default(), p_user_dir()) == node_default()) p_set_user_mode(1);
+    }
     if (!p_user_mode() && !p_is_admin() && !getenv("CUSTHUB_HOME")) { fprintf(stderr, "要管理员 / root 权限(Linux / Mac 前面加 sudo; Windows 用管理员身份运行)\n"); return 1; }
     const char *dir = p_install_dir();
     char node[1200], exe[1200], self[1200], p[1300];
@@ -145,6 +153,11 @@ int cmd_join3(int argc, char **argv)
 
     if (p_self_path(self, sizeof self)) { fprintf(stderr, "找不到本程序的路径\n"); return 1; }
     if (strcmp(self, exe) && copy_file(self, exe)) { fprintf(stderr, "装不进 %s(旧的还在跑? 先 custhub remove)\n", exe); return 1; }
+    char how[400];
+    if (!getenv("CUSTHUB_HOME") || getenv("CUSTHUB_PATH_DIR")) {
+        if (p_path_link(exe, 1, how, sizeof how)) printf("  没能加进 PATH: %s(可以用全路径 %s)\n", how, exe);
+        else if (how[0]) printf("  命令: custhub → %s\n", how);
+    }
 
     sep_join(p, sizeof p, node, "node.key");
     if (ident_load(p, &G.id) && ident_new(p, &G.id)) { fprintf(stderr, "生成不了节点钥匙\n"); return 1; }
@@ -161,7 +174,8 @@ int cmd_join3(int argc, char **argv)
     p_hostname(host, sizeof host);
     for (char *c = host; *c; c++) if (*c == ' ') *c = '_';
     sep_join(logp, sizeof logp, node, "mesh.log");
-    int n = snprintf(nc, sizeof nc, "master %s\nctl %s\nlog %s\nhello %s %s %s\n", master_line, CTL_V3, logp, host, CH_PLAT, CH_VERSION);
+    const char *ctl = getenv("CUSTHUB_CTL");           /* 测试用: 本机已经有一份在跑时换个控制口 */
+    int n = snprintf(nc, sizeof nc, "master %s\nctl %s\nlog %s\nhello %s %s %s\n", master_line, ctl && *ctl ? ctl : CTL_V3, logp, host, CH_PLAT, CH_VERSION);
     if (repo) n += snprintf(nc + n, sizeof nc - (size_t)n, "github %s\n", repo);
     if (ol > 0) {
         char *sv = NULL;
@@ -204,6 +218,18 @@ int cmd_join3(int argc, char **argv)
     return 0;
 }
 
+/* 服务启动时补上 PATH(老版本装的、升级上来的机器没走过新的 join): 只有本程序就是安装目录里那份时才做 */
+void path_ensure(void)
+{
+    char self[1200], e1[1200], e2[1200], how[400];
+    if (getenv("CUSTHUB_HOME") && !getenv("CUSTHUB_PATH_DIR")) return;
+    if (p_self_path(self, sizeof self)) return;
+    sep_join(e1, sizeof e1, p_install_dir(), exe_name()); sep_join(e2, sizeof e2, p_user_dir(), exe_name());
+    if (strcmp(self, e1) && strcmp(self, e2)) return;
+    if (!strcmp(self, e2)) p_set_user_mode(1);
+    if (p_path_link(self, 1, how, sizeof how)) logf_("没能加进 PATH: %s", how);
+}
+
 int cmd_run(int argc, char **argv)
 {
     char node[1200];
@@ -224,6 +250,8 @@ int cmd_remove3(int argc, char **argv)
     int fd = ctl_open_raw(node);                       /* 先让在跑的那份自己退出(Windows 上升级后是新起的进程, 结束任务不一定停得了它) */
     if (fd >= 0) { char b[64]; p_send(fd, "QUIT\n", 5); while (p_recv(fd, b, sizeof b) > 0) {} p_close(fd); }
     p_service_remove(node, why, sizeof why);
+    char exe[1200], how[400]; sep_join(exe, sizeof exe, dir, exe_name());
+    if (!getenv("CUSTHUB_HOME") || getenv("CUSTHUB_PATH_DIR")) p_path_link(exe, 0, how, sizeof how);
     p_sleep_ms(1500);
     int r = p_rmtree(dir);
     printf(r ? "已注销服务; %s 里有删不掉的, 重启后删\n" : "已注销服务, 删掉了 %s\n", dir);

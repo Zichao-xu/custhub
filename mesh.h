@@ -237,9 +237,13 @@ int  scrypt_kdf(const uint8_t *pw, size_t pn, const uint8_t *salt, size_t sn, ui
 int  passphrase_seed(const char *phrase, const char *label, uint8_t seed[32]);
 int  cmd_join3(int argc, char **argv);
 int  cmd_run(int argc, char **argv);
+void path_ensure(void);                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
 int  cmd_remove3(int argc, char **argv);
 const char *node_default(void);                          /* 默认节点目录(用户模式装过就用它) */
-int  pass_load(char *buf, size_t cap);   /* 发起方: 读本机 <目录>/pass; 没有返回 0 */
+#define PASSSLOTS 8              /* 本机存的通行证: <目录>/pass, pass.1 … pass.7 */
+int  pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap);   /* 发起方: 挑一张对 dst + 服务有效的(dst NULL: 没过期就行); 没有返回 0 */
+int  pass_store(const char *text, size_t len, char *slot, size_t scap);       /* 存进 <目录>: 同对象同范围的替换, 否则空位 / 过期的 / 最早到期的; 0 成功 */
+int  cmd_pass_local(int argc, char **argv);              /* custhub pass [文件]: 装上 / 列出本机通行证 */
 /* app.c */
 void ctl_accept(void);
 void ctl_io(int qi);

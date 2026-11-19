@@ -46,7 +46,7 @@ conf(){  # conf 名字 ctl端口 [listen/announce 端口]
 conf r1 $((base+11)) $P1; conf r2 $((base+12)) $P2; conf a $((base+13)); conf b $((base+14))
 for n in r1 r2 a b; do cp "$T/trust1" "$T/$n/trust"; done
 start(){ $M run "$T/$1" >>"$T/$1.log" 2>&1 & eval "PID_$1=$!"; }
-$M pass "$T/a" --to all --svc "port:*" 2>/dev/null || echo "  ✘ mesh pass 给 a 签发失败"   # a 凭通行证连 b
+$M key --dir "$T/a" pass --to all --svc "port:*" 2>/dev/null || echo "  ✘ mesh pass 给 a 签发失败"   # a 凭通行证连 b
 for n in r1 r2 a b; do start $n; done
 
 # b 上的被访问服务: 回显
@@ -139,7 +139,7 @@ o=$(printf x | $M connect "$T/x" b $ECHO 2>&1); [ "$o" != x ] && ok "x 连不了
 
 echo "== 7 访客(通行证即入场券)"
 mkdir -p "$T/g"; $M keygen "$T/g" >"$T/g.pub"; cp "$T/trust2" "$T/g/trust"; conf g $((base+16)); printf "fallback /nonexistent\nhello host-g\n" >>"$T/g/conf"
-$M pass "$T/a" --for "$(cat "$T/g.pub")" --to b --svc "port:*" --out "$T/g/pass" 2>/dev/null   # 名单外的 g 当访客
+$M key --dir "$T/a" pass --for "$(cat "$T/g.pub")" --to b --svc "port:*" --out "$T/g/pass" 2>/dev/null   # 名单外的 g 当访客
 start g
 g_up(){ $M ls "$T/g" | awk '/^挂中继/{f=1;next} /^链路/{f=0} f' | grep -q ' 通$'; }
 s=$(waitfor 15 g_up) && ok "名单外的 g 凭通行证 ${s}s 挂上中继(没进待批准)" || ng "g 没以访客身份挂上"

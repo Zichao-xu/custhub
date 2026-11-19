@@ -100,7 +100,7 @@ static void init_try(int si)
     hs_init(&s->hs, 1, G.id.xsec, G.id.x, m->x);
     static uint8_t m1[PASSMAX + 256]; static char pl[PASSMAX + 32];
     int pn = snprintf(pl, sizeof pl, "%s\n", s->req);              /* 请求一行 + 本机通行证(没有就空, 对方会拒) */
-    pn += pass_load(pl + pn, sizeof pl - (size_t)pn);
+    pn += pass_load(s->dst, s->req, pl + pn, sizeof pl - (size_t)pn);
     long n = hs_write1(&s->hs, (const uint8_t *)pl, (size_t)pn, m1);
     send_open(r, s->sid, s->dst, G.id.ed, 3);
     conn_send(r, F_DATA, s->sid, m1, (size_t)n);

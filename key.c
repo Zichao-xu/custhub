@@ -42,7 +42,7 @@ static int ok_svc(const char *s)
 
 int cmd_pass(int argc, char **argv)
 {
-    const char *dir = NULL, *to = NULL, *svc = NULL, *forw = NULL, *out = NULL; double hours = 2;
+    const char *dir = NULL, *to = NULL, *svc = "sh", *forw = NULL, *out = NULL; double hours = 2;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         if (!strcmp(a, "--to") && v) { to = v; i++; }
@@ -53,8 +53,9 @@ int cmd_pass(int argc, char **argv)
         else if (!dir && a[0] != '-') dir = a;
         else { dir = NULL; break; }
     }
-    if (!dir || !to || !svc) {
-        fprintf(stderr, "用法: mesh pass <目录> --to all|名字或公钥,… --svc \"sh port:22\" [--for 名字|公钥] [--hours N] [--out 文件]\n");
+    if (!dir || !to) {
+        fprintf(stderr, "用法: custhub key pass --to all|机器,… [--svc \"sh port:22\"(默认 sh)] [--for 名字|公钥] [--hours N(默认 2)] [--out 文件|-]\n"
+                        "  不写 --for: 给本机, 直接生效; 写 --for: 存成 <名字>.pass, 发给对方, 对方 custhub pass <文件> 装上\n");
         return 2;
     }
     G.quiet = 1;
@@ -102,11 +103,23 @@ int cmd_pass(int argc, char **argv)
     if (pass_parse(text, len, G.master, &P, why, sizeof why) || pass_allows(&P, who, NULL, NULL, now, why, sizeof why)) {
         fprintf(stderr, "签出来的通行证自己验不过(%s), 不输出\n", why); return 1;
     }
-    char path[300];
-    if (!forw && !out) { snprintf(path, sizeof path, "%s/pass", dir); out = path; }
-    if (out) {
+    char path[1300];
+    if (!forw && !out) {                                  /* 给本机: 存进本机的通行证位置(几张并存) */
+        if (pass_store(text, len, path, sizeof path)) { fprintf(stderr, "存不了: %s\n", path); return 1; }
+        fprintf(stderr, "通行证 → 本机(%s): 进 %s, 用 %s, %s 到期\n", path, to, svc, us);
+        return 0;
+    }
+    if (forw && !out) {                                   /* 给别人: 默认存成 <名字>.pass(公钥给的叫 guest-<前 6 位>.pass) */
+        int named = member_by_name(forw) != NULL;
+        if (named) snprintf(path, sizeof path, "%s.pass", forw);
+        else { char sh6[8]; snprintf(sh6, sizeof sh6, "%.6s", whob); for (char *c = sh6; *c; c++) if (*c == '/' || *c == '+') *c = '_';
+               snprintf(path, sizeof path, "guest-%s.pass", sh6); }
+        out = path;
+    }
+    if (out && strcmp(out, "-")) {
         if (m_write(out, text, len)) { fprintf(stderr, "写不了 %s\n", out); return 1; }
         fprintf(stderr, "通行证 → %s: 给 %s, 进 %s, 用 %s, %s 到期\n", out, forw ? forw : "本机", to, svc, us);
+        if (forw) fprintf(stderr, "  把这个文件发给对方, 对方执行: custhub pass %s\n", out);
     } else fwrite(text, 1, len, stdout);
     return 0;
 }

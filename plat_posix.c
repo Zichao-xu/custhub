@@ -691,6 +691,79 @@ int p_service_remove(const char *dir, char *why, size_t wcap)
     return 0;
 }
 
+/* 命令加进 PATH: root → /usr/local/bin/custhub(OpenWrt /usr/bin/custhub) 链到 exe; 普通用户 → ~/.local/bin/custhub,
+ * 再在 ~/.zshrc(和已有的 ~/.bashrc)末尾加一行 PATH(带 "# custhub" 记号, 卸载时按记号删)
+ * 那个位置已经有别人的同名文件(不是链接)就不动。演练模式不碰系统; CUSTHUB_PATH_DIR 可指定链接放哪(测试用) */
+#define RC_LINE "export PATH=\"$HOME/.local/bin:$PATH\"  # custhub\n"
+static void rc_edit(const char *home, const char *name, int on, int create)
+{
+    char p[1200]; snprintf(p, sizeof p, "%s/%s", home, name);
+    static char t[262144]; size_t n = 0;
+    FILE *f = fopen(p, "r");
+    if (!f && !(on && create)) return;
+    if (f) { n = fread(t, 1, sizeof t - 1, f); fclose(f); }
+    t[n] = 0;
+    if (n == sizeof t - 1) return;                      /* 太大的不碰 */
+    int has = strstr(t, "# custhub") != NULL;
+    if (on) {
+        if (has || strstr(t, ".local/bin")) return;     /* 已经有了(我们加的, 或用户自己就有) */
+        f = fopen(p, "a"); if (!f) return;
+        if (n && t[n - 1] != '\n') fputc('\n', f);
+        fputs(RC_LINE, f); fclose(f);
+        if (create && n == 0) chmod(p, 0644);
+    } else if (has) {
+        f = fopen(p, "w"); if (!f) return;              /* 截断重写: 保留原来的权限 */
+        for (char *l = t; *l; ) {
+            char *e = strchr(l, '\n'); size_t k = e ? (size_t)(e - l + 1) : strlen(l);
+            if (!(strstr(l, "# custhub") && strstr(l, "# custhub") < l + k)) fwrite(l, 1, k, f);
+            l += k;
+        }
+        fclose(f);
+    }
+}
+
+int p_path_link(const char *exe, int on, char *how, size_t cap)
+{
+    how[0] = 0;
+    const char *pd = getenv("CUSTHUB_PATH_DIR");
+    if (dry() && !(pd && *pd)) return 0;
+    int user = geteuid() != 0;
+    const char *home = getenv("HOME");
+    if (user && (!home || !*home)) { struct passwd *pw = getpwuid(getuid()); home = pw ? pw->pw_dir : NULL; }
+    char d[1100], ln[1200];
+    if (pd && *pd) snprintf(d, sizeof d, "%s", pd);
+    else if (!user) snprintf(d, sizeof d, "%s", is_file("/etc/openwrt_release") ? "/usr/bin" : "/usr/local/bin");
+    else if (home) snprintf(d, sizeof d, "%s/.local/bin", home);
+    else { snprintf(how, cap, "找不到家目录"); return -1; }
+    snprintf(ln, sizeof ln, "%s/custhub", d);
+    struct stat st; char cur[1200]; long cl = -1;
+    int there = lstat(ln, &st) == 0;
+    if (there && S_ISLNK(st.st_mode)) { cl = (long)readlink(ln, cur, sizeof cur - 1); if (cl >= 0) cur[cl] = 0; }
+    if (!on) {
+        if (there && S_ISLNK(st.st_mode) && cl >= 0 && strstr(cur, "custhub")) unlink(ln);
+        if (user && home && !(pd && *pd)) { rc_edit(home, ".zshrc", 0, 0); rc_edit(home, ".bashrc", 0, 0); rc_edit(home, ".profile", 0, 0); }
+        snprintf(how, cap, "%s", ln);
+        return 0;
+    }
+    if (there && !S_ISLNK(st.st_mode)) { snprintf(how, cap, "%s 已有别的文件, 没动它", ln); return -1; }
+    if (!(there && cl >= 0 && !strcmp(cur, exe))) {
+        if (!is_dir(d)) {                               /* 建出来的目录要让别人也能进(umask 是 077) */
+            if (user && home) { char l1[1100]; snprintf(l1, sizeof l1, "%s/.local", home); if (!mkdir(l1, 0755)) chmod(l1, 0755); }
+            if (mkdir(d, 0755) == 0) chmod(d, 0755);
+        }
+        if (there) unlink(ln);
+        if (symlink(exe, ln)) { snprintf(how, cap, "链不了 %s: %s", ln, strerror(errno)); return -1; }
+    }
+    if (user && home && !(pd && *pd)) {
+        const char *sh = getenv("SHELL");
+        int zsh = (sh && strstr(sh, "zsh")) || is_dir("/Library");   /* Mac 默认 zsh */
+        rc_edit(home, ".zshrc", 1, zsh);
+        rc_edit(home, ".bashrc", 1, 0);
+        snprintf(how, cap, "%s(新开的终端生效)", ln);
+    } else snprintf(how, cap, "%s", ln);
+    return 0;
+}
+
 int p_rmtree(const char *path)
 {
     struct stat st;

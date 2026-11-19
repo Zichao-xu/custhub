@@ -27,8 +27,8 @@ i=0; for n in r e b g; do i=$((i+1))
   echo "upnp off" >>"$T/$n/conf"                        # 测试不碰真路由器
   cp "$T/trust" "$T/$n/trust"
 done
-$M pass "$T/e" --to b --svc sh 2>/dev/null || ng "给 e 签发失败"
-$M pass "$T/e" --for "$(cat "$T/g.pub")" --to e --svc sh --out "$T/g/pass" 2>/dev/null || ng "给访客 g 签发失败"
+$M key --dir "$T/e" pass --to b --svc sh 2>/dev/null || ng "给 e 签发失败"
+$M key --dir "$T/e" pass --for "$(cat "$T/g.pub")" --to e --svc sh --out "$T/g/pass" 2>/dev/null || ng "给访客 g 签发失败"
 for n in r e b g; do $M run "$T/$n" 2>/dev/null & done
 up(){ $M ls "$T/$1" | awk '/^挂中继/{f=1;next} /^链路/{f=0} f' | grep -q ' 通$'; }
 for _ in $(seq 60); do up e && up b && up g && break; sleep 0.25; done
@@ -63,7 +63,7 @@ echo "== 3 拒绝"
 cp "$T/e/pass" "$T/e.pass"; rm -f "$T/e/pass"
 o=$(S -- true 2>&1 </dev/null); c=$?
 echo "$o" | grep -q "没有通行证" && [ $c = 255 ] && ok "没通行证被拒: $o" || ng "没证: $c $o"
-$M pass "$T/e" --to b --svc "port:*" 2>/dev/null
+$M key --dir "$T/e" pass --to b --svc "port:*" 2>/dev/null
 o=$(S -- true 2>&1 </dev/null)
 echo "$o" | grep -q "不含这项服务" && ok "通行证没有 sh 被拒: $o" || ng "证里无 sh: $o"
 cp "$T/e.pass" "$T/e/pass"

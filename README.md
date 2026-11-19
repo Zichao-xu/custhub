@@ -23,7 +23,13 @@ curl -fsSL https://github.com/<owner>/<repo>/releases/latest/download/custhub3-j
 irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1 | iex
 ```
 
-它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向中继报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。
+它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向中继报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。节点目录只给 root / 管理员，所以在服务器上用 `sudo custhub …`，Windows 上用管理员终端。
+
+### 工程师登录
+
+1. 工程师电脑照上面接入（自己的 Mac 建议用户模式：`curl … | CUSTHUB_JOIN_ARGS=--user sh`），把接入码给管理员。
+2. 管理员：`custhub key approve <接入码> zhang`，再 `custhub key pass --for zhang --to web1,web2 --hours 8`，得到 `zhang.pass`，发给工程师。
+3. 工程师：`custhub pass zhang.pass`，然后 `custhub sh web1`。`custhub pass` 不带参数列出本机的通行证和剩余时间。
 
 ## 管理员
 
@@ -37,7 +43,7 @@ custhub join --user --github <owner>/<repo>
 custhub key unlock                      # 输入 12 个词, 主钥匙进 ssh-agent(默认 8 小时)
 custhub key pending                     # 待批准的机器, 带接入码
 custhub key approve R44-CQP office-pc   # 按接入码批准并起名
-custhub key pass --to office-pc --svc "sh port:3389" --hours 2   # 给本机签通行证
+custhub key pass --to office-pc --svc "sh port:3389" --hours 2   # 给本机签通行证(--svc 默认 sh)
 custhub sh office-pc                    # 交互 shell
 custhub sh office-pc -- ipconfig        # 跑一条命令, 退出码原样带回
 custhub connect office-pc 3389          # 标准输入输出接到对方本机端口(或给 ssh 当 ProxyCommand)

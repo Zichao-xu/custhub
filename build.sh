@@ -25,12 +25,12 @@ RF=("${CF[@]}" -Os -ffunction-sections -fdata-sections -DNDEBUG -DCH_VERSION="\"
 b(){  # b zig目标 平台名 [额外参数…]
   local t=$1 n=$2; shift 2
   case $n in ${ONLY:-}*) ;; *) return 0 ;; esac
-  local ext= plat=plat_posix.c libs=(); case $n in win*) ext=.exe; plat=plat_win.c; libs=(-lws2_32 -ladvapi32 -lshell32) ;; esac
+  local ext= plat=plat_posix.c libs=(); case $n in win*) ext=.exe; plat=plat_win.c; libs=(-lws2_32 -ladvapi32 -lshell32 -luser32) ;; esac
   local f="$OUT/custhub3-$V-$n$ext"
   zig cc -target "$t" "${RF[@]}" -DCH_PLAT="\"$n\"" "$@" -o "$f" mesh_main.c "${CORE[@]}" "$plat" ${libs[@]+"${libs[@]}"}
   rm -f "$f".pdb "${f%.exe}.pdb"
   if [ -n "$ext" ]; then   # 只许依赖 Win10 自带的 DLL(查 PE 导入表; WinHTTP 是运行时按需加载的, 不在表里)
-    local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|ucrtbase|api-ms-win-crt-[a-z0-9-]+)\.dll$' || true)
+    local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|user32|ucrtbase|api-ms-win-crt-[a-z0-9-]+)\.dll$' || true)
     [ -z "$bad" ] || { echo "$n 依赖了 Win10 不一定自带的 DLL: $bad" >&2; exit 1; }
   fi
   printf '%-14s %8s  %s\n' "$n" "$(wc -c <"$f" | tr -d ' ')" "$(shasum -a 256 "$f" | cut -d' ' -f1)"

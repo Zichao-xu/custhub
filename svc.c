@@ -53,10 +53,56 @@ deny:
     return -1;
 }
 
-int pass_load(char *buf, size_t cap)
+static void pass_slot(int k, char *p, size_t cap)
 {
-    char p[300];
-    snprintf(p, sizeof p, "%s/pass", G.dir);
+    if (k) snprintf(p, cap, "%s/pass.%d", G.dir, k); else snprintf(p, cap, "%s/pass", G.dir);
+}
+
+int pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap)
+{
+    static char t[PASSMAX + 1]; static pass_t P;
+    char p[1300], why[120]; int fk = -1;
+    int64_t now = wall_ms() / 1000;
+    for (int k = 0; k < PASSSLOTS; k++) {
+        pass_slot(k, p, sizeof p);
+        long n = m_read(p, t, sizeof t);
+        if (n <= 0 || (size_t)n > cap) continue;
+        if (pass_parse(t, (size_t)n, G.master, &P, why, sizeof why)) { if (fk < 0) fk = k; continue; }   /* 验不过的也可能是唯一一张: 交给对方说原因 */
+        if (!pass_allows(&P, G.id.ed, dst, svc, now, why, sizeof why)) { memcpy(buf, t, (size_t)n); return (int)n; }
+        if (fk < 0) fk = k;
+    }
+    if (fk < 0) return 0;                       /* 没有合适的: 给第一张(对方会说拒绝原因; 取包不要通行证) */
+    pass_slot(fk, p, sizeof p);
     long n = m_read(p, buf, cap);
     return n > 0 ? (int)n : 0;
+}
+
+static int same_scope(const pass_t *a, const pass_t *b)
+{
+    if (memcmp(a->key, b->key, 32) || a->to_all != b->to_all || a->nto != b->nto || strcmp(a->svc, b->svc)) return 0;
+    for (int i = 0; i < a->nto; i++) if (memcmp(a->to[i], b->to[i], 32)) return 0;
+    return 1;
+}
+
+int pass_store(const char *text, size_t len, char *slot, size_t scap)
+{
+    static pass_t N, P; static char t[PASSMAX + 1];
+    char p[1300], why[120];
+    if (pass_parse(text, len, G.master, &N, why, sizeof why)) { snprintf(slot, scap, "%s", why); return -1; }
+    if (memcmp(N.key, G.id.ed, 32)) { snprintf(slot, scap, "不是发给本机的(通行证里的公钥不是本机节点的)"); return -1; }
+    int64_t now = wall_ms() / 1000;
+    int pick = -1, empty = -1, dead = -1, soon = -1; int64_t su = 0;
+    for (int k = 0; k < PASSSLOTS; k++) {
+        pass_slot(k, p, sizeof p);
+        long n = m_read(p, t, sizeof t);
+        if (n <= 0 || pass_parse(t, (size_t)n, G.master, &P, why, sizeof why)) { if (empty < 0) empty = k; continue; }
+        if (same_scope(&N, &P)) { pick = k; break; }
+        if (P.until <= now) { if (dead < 0) dead = k; continue; }
+        if (soon < 0 || P.until < su) { soon = k; su = P.until; }
+    }
+    if (pick < 0) pick = empty >= 0 ? empty : dead >= 0 ? dead : soon;
+    pass_slot(pick, p, sizeof p);
+    if (m_write(p, text, len)) { snprintf(slot, scap, "写不了 %s", p); return -1; }
+    snprintf(slot, scap, "%s", p);
+    return 0;
 }
