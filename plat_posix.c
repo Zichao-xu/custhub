@@ -427,7 +427,7 @@ int p_run(const char *const *argv, char *out, size_t cap, int timeout_s)
         close(fd[0]); dup2(fd[1], 1); dup2(fd[1], 2);
         int nul = open("/dev/null", O_RDONLY); if (nul >= 0) dup2(nul, 0);
         for (int f = 3; f < 1024; f++) close(f);
-        execv(argv[0], (char *const *)argv); _exit(127);
+        execvp(argv[0], (char *const *)argv); _exit(127);   /* 查 PATH: systemctl / launchctl 不写全路径 */
     }
     close(fd[1]);
     size_t n = 0; int timed = 0;
@@ -558,11 +558,15 @@ const char *p_service_kind(void)
 
 static int dry(void) { return getenv("CUSTHUB_SVC_DRY") != NULL; }
 
+static char run_out[300];                                /* 上一条系统命令的输出(失败时附在报错里) */
 static int run_q(const char *const *av)                /* 跑系统命令; 演练时只记下来 */
 {
     if (dry()) return 0;
     char out[512];
-    return p_run(av, out, sizeof out, 60);
+    int r = p_run(av, out, sizeof out, 60);
+    for (char *c = out; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
+    snprintf(run_out, sizeof run_out, "%s%s", r == 127 ? "找不到命令 " : "", out);
+    return r;
 }
 
 static int put_file(const char *dir, const char *path, const char *text, int exec)
@@ -592,7 +596,7 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
         if (put_file(dir, SD_UNIT, t, 0)) { snprintf(why, wcap, "写不了 %s", SD_UNIT); return -1; }
         const char *a[] = { "systemctl", "daemon-reload", NULL }, *b[] = { "systemctl", "enable", "custhub", NULL }, *c[] = { "systemctl", "restart", "custhub", NULL };
         run_q(a); run_q(b);
-        if (run_q(c)) { snprintf(why, wcap, "systemctl restart custhub 失败"); return -1; }
+        if (run_q(c)) { snprintf(why, wcap, "systemctl restart custhub 失败: %s", run_out); return -1; }
     } else if (!strcmp(k, "procd")) {
         snprintf(t, sizeof t, "#!/bin/sh /etc/rc.common\n# custhub: 开机起, 挂了 procd 拉起\nSTART=99\nUSE_PROCD=1\n\n"
                  "start_service() {\n\tprocd_open_instance\n\tprocd_set_param command \"%s\" run \"%s\"\n"
@@ -600,7 +604,7 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
         if (put_file(dir, PROCD, t, 1)) { snprintf(why, wcap, "写不了 %s", PROCD); return -1; }
         const char *a[] = { PROCD, "enable", NULL }, *b[] = { PROCD, "restart", NULL };
         run_q(a);
-        if (run_q(b)) { snprintf(why, wcap, "%s restart 失败", PROCD); return -1; }
+        if (run_q(b)) { snprintf(why, wcap, "%s restart 失败: %s", PROCD, run_out); return -1; }
     } else if (!strcmp(k, "launchd")) {
         snprintf(t, sizeof t, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                  "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -611,7 +615,7 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
         if (put_file(dir, PLIST, t, 0)) { snprintf(why, wcap, "写不了 %s", PLIST); return -1; }
         const char *a[] = { "launchctl", "bootout", "system/com.custhub.run", NULL }, *b[] = { "launchctl", "bootstrap", "system", PLIST, NULL };
         run_q(a);
-        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap 失败"); return -1; }
+        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap 失败: %s", run_out); return -1; }
     } else if (!strcmp(k, "launchd-user")) {            /* 用户模式(Mac): 自己账号的 LaunchAgent */
         char pl[1100], dom[40]; snprintf(pl, sizeof pl, "%s/Library/LaunchAgents/com.custhub.run.plist", getenv("HOME") ? getenv("HOME") : "");
         snprintf(dom, sizeof dom, "gui/%d", (int)getuid());
@@ -625,7 +629,7 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
         char svc[60]; snprintf(svc, sizeof svc, "%s/com.custhub.run", dom);
         const char *a[] = { "launchctl", "bootout", svc, NULL }, *b[] = { "launchctl", "bootstrap", dom, pl, NULL };
         run_q(a);
-        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap %s 失败", dom); return -1; }
+        if (run_q(b)) { snprintf(why, wcap, "launchctl bootstrap %s 失败: %s", dom, run_out); return -1; }
     } else if (!strcmp(k, "systemd-user")) {            /* 用户模式(Linux): systemd --user */
         char u[1100]; snprintf(u, sizeof u, "%s/.config/systemd/user/custhub.service", getenv("HOME") ? getenv("HOME") : "");
         if (!dry()) { char d1[1100]; snprintf(d1, sizeof d1, "%s/.config", getenv("HOME")); mkdir(d1, 0755);
@@ -637,7 +641,7 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
         const char *a[] = { "systemctl", "--user", "daemon-reload", NULL }, *b[] = { "systemctl", "--user", "enable", "custhub", NULL },
                    *c[] = { "systemctl", "--user", "restart", "custhub", NULL };
         run_q(a); run_q(b);
-        if (run_q(c)) { snprintf(why, wcap, "systemctl --user restart custhub 失败"); return -1; }
+        if (run_q(c)) { snprintf(why, wcap, "systemctl --user restart custhub 失败: %s", run_out); return -1; }
     } else { snprintf(why, wcap, "认不出这台机器的服务管理方式(systemd / procd / launchd)"); return -1; }
     if (dry()) {                                        /* 演练: 不碰系统, 直接在后台起 */
         pid_t pid = fork();
