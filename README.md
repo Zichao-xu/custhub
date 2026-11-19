@@ -31,6 +31,10 @@ irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1
 2. 管理员：`custhub key approve <接入码> zhang`，再 `custhub key pass --for zhang --to web1,web2 --hours 8`，得到 `zhang.pass`，发给工程师。
 3. 工程师：`custhub pass zhang.pass`，然后 `custhub sh web1`。`custhub pass` 不带参数列出本机的通行证和剩余时间。
 
+## 终端界面
+
+直接敲 `custhub`（不带参数）进界面：机器列表（在线没有、版本、直连还是经哪台中继），选中按 Enter 开 shell，`v` 看本机通行证，`i` 装别人发来的通行证。按 `u` 解锁主钥匙后多出管理功能：待批准（`a` 批准，默认用对方机器名）、`s` 签通行证、`n` 新客户接入（一行通用接入命令，Windows / Mac / Linux 都能直接粘贴）、`d` 移出名单、`l` 上锁。
+
 ## 管理员
 
 管理员自己的电脑用**用户模式**装（装在 `~/.custhub`，用自己账号的登录项跑，不要 root）：

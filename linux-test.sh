@@ -2,7 +2,7 @@
 # 在 Debian 容器里用 gcc 编译并跑全部 POSIX 验收(本机要有 docker): ./linux-test.sh [套名 …]
 #   不给套名 = 全部; 只挂本目录(放在哪里都能跑)
 set -e
-ALL="purity pass-test test role-test sh-test upnp-test rel-test join-test admin-test group-test"
+ALL="purity pass-test test role-test sh-test upnp-test rel-test join-test admin-test group-test tui-test"
 if [ "${1:-}" != inside ]; then
   cd "$(dirname "$0")"
   [ $# -gt 0 ] || set -- $ALL

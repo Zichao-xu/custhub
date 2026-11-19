@@ -39,6 +39,8 @@ int cmd_mesh(int argc, char **argv)
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
         argc++; av2[argc] = NULL; argv = av2;
     }
+    if (argc == 1 && p_tty_raw(1)) { p_tty_raw(0); return cmd_tui(node_default()); }   /* 不带参数 + 在终端里: 界面 */
+    if (argc <= 3 && !strcmp(c, "tui")) return cmd_tui(argc == 3 ? argv[2] : node_default());
     char p[300], b64[48];
     if (argc == 3 && (!strcmp(c, "keygen") || !strcmp(c, "pub"))) {
         if (!strcmp(c, "keygen")) {                      /* 目录没有就建(连上一级), 只给自己 */
@@ -122,6 +124,7 @@ int cmd_mesh(int argc, char **argv)
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"
             "                                             写 --for 时存成 <人>.pass, 发给对方\n\n"
             "其他\n"
+            "  custhub                           不带参数: 终端界面(列表、开 shell、通行证; 解锁后批准、签证、新客户接入)\n"
             "  custhub version | code | help [all]\n", CH_VERSION, CH_PLAT);
     if (all) fprintf(o, "\n不常用\n"
             "  custhub join --github 仓库 | --seed 文件 [--user]   指定种子; --user 用户模式(装在家目录, 不要 root)\n"

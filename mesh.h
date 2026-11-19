@@ -238,7 +238,8 @@ int  passphrase_seed(const char *phrase, const char *label, uint8_t seed[32]);
 int  cmd_join3(int argc, char **argv);
 int  cmd_run(int argc, char **argv);
 void path_ensure(void);
-int  cmd_user(int argc, char **argv);                     /* custhub user add|del|ls */                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
+int  cmd_user(int argc, char **argv);
+int  cmd_tui(const char *dir);                           /* tui.c: custhub 不带参数的终端界面 */                     /* custhub user add|del|ls */                                  /* 服务启动时把命令补进 PATH(安装目录里那份才做) */
 int  cmd_remove3(int argc, char **argv);
 const char *node_default(void);                          /* 默认节点目录(用户模式装过就用它) */
 #define PASSSLOTS 8              /* 本机存的通行证: <目录>/pass, pass.1 … pass.7 */
