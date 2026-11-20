@@ -8,6 +8,7 @@
 #include <aclapi.h>
 #include <sddl.h>
 #include <tlhelp32.h>
+#include <iphlpapi.h>
 #include <stdio.h>
 #include <io.h>
 #include <fcntl.h>
@@ -136,7 +137,19 @@ int p_accept(int lfd, char *peer, size_t pcap)
     return (int)s;
 }
 
-void p_open_firewall(int port) { (void)port; }
+/* Windows 防火墙默认挡入站: 按程序放行本程序(IPv4、IPv6、所有端口、所有网络配置), 每次启动先删后加(程序路径可能换过) */
+void p_open_firewall(int port)
+{
+    static int done; char self[1200], prog[1300], o[512];
+    (void)port;
+    if (done || p_self_path(self, sizeof self)) return;
+    done = 1;
+    snprintf(prog, sizeof prog, "program=%s", self);
+    const char *del[] = { "netsh", "advfirewall", "firewall", "delete", "rule", "name=custhub", NULL };
+    const char *add[] = { "netsh", "advfirewall", "firewall", "add", "rule", "name=custhub", "dir=in", "action=allow", prog, "enable=yes", "profile=any", NULL };
+    p_run(del, o, sizeof o, 20);
+    p_run(add, o, sizeof o, 20);
+}
 
 int64_t now_ms(void) { return (int64_t)GetTickCount64(); }
 
@@ -644,7 +657,24 @@ int p_local_ip6(char *out, size_t cap)
     int ok = !connect(s, (struct sockaddr *)&a, sizeof a) && !getsockname(s, (struct sockaddr *)&a, &l)
              && (a.sin6_addr.s6_addr[0] & 0xe0) == 0x20 && inet_ntop(AF_INET6, &a.sin6_addr, out, cap);
     closesocket(s);
-    return ok ? 0 : -1;
+    if (!ok) return -1;
+    /* 往外连默认用临时地址(隐私扩展, 每天换): 声明可达要用同一块网卡上的固定地址 */
+    static unsigned char buf[32768]; ULONG bl = sizeof buf;
+    IP_ADAPTER_ADDRESSES *aa = (IP_ADAPTER_ADDRESSES *)buf;
+    if (GetAdaptersAddresses(AF_INET6, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, NULL, aa, &bl) != NO_ERROR) return 0;
+    for (IP_ADAPTER_ADDRESSES *ad = aa; ad; ad = ad->Next) {
+        int mine = 0;
+        for (IP_ADAPTER_UNICAST_ADDRESS *u = ad->FirstUnicastAddress; u; u = u->Next)
+            if (u->Address.lpSockaddr->sa_family == AF_INET6 && !memcmp(&((struct sockaddr_in6 *)u->Address.lpSockaddr)->sin6_addr, &a.sin6_addr, 16)) mine = 1;
+        if (!mine) continue;
+        for (IP_ADAPTER_UNICAST_ADDRESS *u = ad->FirstUnicastAddress; u; u = u->Next) {
+            struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)u->Address.lpSockaddr;
+            if (s6->sin6_family != AF_INET6 || (s6->sin6_addr.s6_addr[0] & 0xe0) != 0x20 || u->SuffixOrigin == IpSuffixOriginRandom || u->DadState != IpDadStatePreferred) continue;
+            char t[64]; if (inet_ntop(AF_INET6, &s6->sin6_addr, t, sizeof t)) snprintf(out, cap, "%s", t);
+            return 0;
+        }
+    }
+    return 0;
 }
 
 int p_local_ipv4s(char (*out)[48], int max)

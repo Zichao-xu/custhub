@@ -129,9 +129,9 @@ void qual_tick(void)
         if (w && (best < 0 || w > (G.c[best].fam == 6 ? 2 : 1))) best = i;
     }
     if (best < 0) { G.probe6_next = now + 60000; port6_state("没有能测 IPv6 的机器(网里还没有别的机器有 IPv6)"); return; }
-    whole = G.c[best].fam != 6;
+    (void)whole;                                       /* 总是给整个地址: 对方看到的可能是临时地址(会换), 要测的是固定地址 */
     if (G.announce6[0]) snprintf(pl, sizeof pl, "%s", G.announce6);
-    else if (whole) snprintf(pl, sizeof pl, "[%s]:%d", v6, port); else snprintf(pl, sizeof pl, "%d", port);
+    else snprintf(pl, sizeof pl, "[%s]:%d", v6, port);
     conn_send(best, F_PROBE, 0, pl, strlen(pl));
     G.probing = 1; G.probe_fam = 6; G.probe_conn = best; G.probe_deadline = now + 15000;
 }

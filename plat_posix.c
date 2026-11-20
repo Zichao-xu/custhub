@@ -430,7 +430,25 @@ int p_local_ip6(char *out, size_t cap)
     int ok = !connect(fd, (struct sockaddr *)&a, sizeof a) && !getsockname(fd, (struct sockaddr *)&a, &l)
              && (a.sin6_addr.s6_addr[0] & 0xe0) == 0x20 && inet_ntop(AF_INET6, &a.sin6_addr, out, (socklen_t)cap);
     close(fd);
-    return ok ? 0 : -1;
+    if (!ok) return -1;
+#ifdef __linux__
+    /* 开了隐私扩展时往外连用临时地址(会换): 声明可达要用同一块网卡上的固定地址(/proc/net/if_inet6: 标志 0x01 临时、0x20 弃用、0x40 待定) */
+    FILE *f = fopen("/proc/net/if_inet6", "r");
+    if (!f) return 0;
+    char hx[40], dev[32], want[32] = "", line[200], src[33]; unsigned idx, plen, scope, flags;
+    for (int i = 0; i < 16; i++) snprintf(src + 2 * i, 3, "%02x", a.sin6_addr.s6_addr[i]);
+    while (fgets(line, sizeof line, f)) if (sscanf(line, "%32s %x %x %x %x %31s", hx, &idx, &plen, &scope, &flags, dev) == 6 && !strcmp(hx, src)) snprintf(want, sizeof want, "%s", dev);
+    rewind(f);
+    while (want[0] && fgets(line, sizeof line, f)) {
+        if (sscanf(line, "%32s %x %x %x %x %31s", hx, &idx, &plen, &scope, &flags, dev) != 6 || strcmp(dev, want) || scope || (flags & 0x61)) continue;
+        unsigned char b[16]; for (int i = 0; i < 16; i++) { unsigned v; sscanf(hx + 2 * i, "%2x", &v); b[i] = (unsigned char)v; }
+        if ((b[0] & 0xe0) != 0x20) continue;
+        char t[64]; if (inet_ntop(AF_INET6, b, t, sizeof t)) snprintf(out, cap, "%s", t);
+        break;
+    }
+    fclose(f);
+#endif
+    return 0;
 }
 
 int p_local_ipv4s(char (*out)[48], int max)
