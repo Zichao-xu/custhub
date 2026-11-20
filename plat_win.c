@@ -115,7 +115,8 @@ int p_listen(const char *host, int port)
     if (getaddrinfo(host, ps, &hints, &ai) || !ai) return -1;
     SOCKET s = socket(ai->ai_family, SOCK_STREAM, 0);
     if (s == INVALID_SOCKET) { freeaddrinfo(ai); return -1; }
-    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&one, sizeof one);   /* Windows 的 SO_REUSEADDR 会让第二个进程抢绑同一个口: 要独占 */
+    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char *)&one, sizeof one);
+    if (ai->ai_family == AF_INET6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof one);   /* v4、v6 各开一个监听 */   /* Windows 的 SO_REUSEADDR 会让第二个进程抢绑同一个口: 要独占 */
     if (bind(s, ai->ai_addr, (int)ai->ai_addrlen) || listen(s, 64)) { freeaddrinfo(ai); closesocket(s); return -1; }
     freeaddrinfo(ai);
     p_nb((int)s);
@@ -130,7 +131,7 @@ int p_accept(int lfd, char *peer, size_t pcap)
     char h[64] = "?"; int port = 0;
     if (sa.ss_family == AF_INET) { struct sockaddr_in *s4 = (void *)&sa; inet_ntop(AF_INET, &s4->sin_addr, h, sizeof h); port = ntohs(s4->sin_port); }
     else if (sa.ss_family == AF_INET6) { struct sockaddr_in6 *s6 = (void *)&sa; inet_ntop(AF_INET6, &s6->sin6_addr, h, sizeof h); port = ntohs(s6->sin6_port); }
-    if (peer) snprintf(peer, pcap, "%s:%d", h, port);
+    if (peer) snprintf(peer, pcap, strchr(h, ':') ? "[%s]:%d" : "%s:%d", h, port);   /* IPv6 带方括号 */
     p_nb((int)s);
     return (int)s;
 }
@@ -631,6 +632,19 @@ long p_udp_recv(int fd, void *b, size_t cap)
     int r = recvfrom((SOCKET)fd, (char *)b, (int)cap, 0, NULL, NULL);
     if (r >= 0) return r;
     return would(WSAGetLastError()) ? P_AGAIN : P_FAIL;
+}
+
+int p_local_ip6(char *out, size_t cap)
+{
+    struct sockaddr_in6 a; int l = sizeof a;
+    SOCKET s = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return -1;
+    memset(&a, 0, sizeof a); a.sin6_family = AF_INET6; a.sin6_port = htons(9);
+    inet_pton(AF_INET6, "2001:4860:4860::8888", &a.sin6_addr);   /* 不发包, 只问路由表用哪个源地址 */
+    int ok = !connect(s, (struct sockaddr *)&a, sizeof a) && !getsockname(s, (struct sockaddr *)&a, &l)
+             && (a.sin6_addr.s6_addr[0] & 0xe0) == 0x20 && inet_ntop(AF_INET6, &a.sin6_addr, out, cap);
+    closesocket(s);
+    return ok ? 0 : -1;
 }
 
 int p_local_ipv4s(char (*out)[48], int max)

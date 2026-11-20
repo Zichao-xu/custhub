@@ -428,7 +428,7 @@ loaded:
         for (int i = 1; i + 1 < k; i++) { if (!strcmp(av[i], "--github")) repo = av[++i]; else if (!strcmp(av[i], "--out")) out = av[++i]; }
         if (!repo) { fprintf(stderr, "要 --github 仓库(本机 conf 里也没有)\n"); return 2; }
         char ml[200]; master_line(ml, sizeof ml);
-        static char s[MAXTEXT + 512 + MAXM * 120], hs[MAXM * 120]; hints_text(hs, sizeof hs);   /* 附本机地址簿里的可达地址 */
+        static char s[MAXTEXT + 512 + MAXM * 200], hs[MAXM * 200]; hints_text(hs, sizeof hs);   /* 附本机地址簿里的可达地址 */
         int n = snprintf(s, sizeof s, "custhub-seed v1\nmaster %s\ngithub %s\n%s--trust--\n", ml, repo, hs);
         memcpy(s + n, G.trust.text, G.trust.tlen);
         size_t tl = (size_t)n + G.trust.tlen;

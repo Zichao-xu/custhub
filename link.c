@@ -34,12 +34,28 @@ static int conn_alloc(int fd, int initiator)
     return -1;
 }
 
-int conn_by_peer(const uint8_t ed[32])
+int addr_fam(const char *a) { return a && a[0] == '[' ? 6 : 4; }
+
+int local_ip6(char *out, size_t cap)
+{
+    const char *e = getenv("CUSTHUB_IP6");
+    if (e) { snprintf(out, cap, "%s", e); return *e ? 0 : -1; }
+    return p_local_ip6(out, cap);
+}
+
+int conn_by_peer_fam(const uint8_t ed[32], int fam)
 {
     int best = -1;
     for (int i = 0; i < MAXC; i++)
-        if (G.c[i].state == C_UP && !memcmp(G.c[i].peer, ed, 32) && (best < 0 || G.c[i].born > G.c[best].born)) best = i;
+        if (G.c[i].state == C_UP && !memcmp(G.c[i].peer, ed, 32) && (!fam || G.c[i].fam == fam) && (best < 0 || G.c[i].born > G.c[best].born)) best = i;
     return best;
+}
+
+/* 双栈热备: 两种都通时新流量走 IPv6, IPv6 断了马上落到 IPv4(已在跑的流留在原链路上) */
+int conn_by_peer(const uint8_t ed[32])
+{
+    int k = conn_by_peer_fam(ed, 6);
+    return k >= 0 ? k : conn_by_peer_fam(ed, 4);
 }
 
 uint32_t conn_new_sid(int i) { uint32_t s = G.c[i].next_sid; G.c[i].next_sid += 2; return s; }
@@ -72,6 +88,9 @@ void conn_close(int i, const char *why)
     if (c->state == C_FREE) return;
     if (c->state == C_UP && !c->closing && (member_by_ed(G.id.ed) || c->guest)) logf_("链路断开 %s: %s", name_of(c->peer), why);
     int pending = c->initiator && !member_by_ed(G.id.ed) && !c->guest;
+    for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 == i) {
+        G.t[t].conn6 = -1; snprintf(G.t[t].why6, sizeof G.t[t].why6, "%s", why); G.t[t].next6 = now_ms() + G.t[t].back6;
+    }
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn == i) {
         target_t *tg = &G.t[t];
         tg->conn = -1;
@@ -85,7 +104,7 @@ void conn_close(int i, const char *why)
         if (G.c[f].state == C_UP) conn_send(f, F_PROBEA, 0, m, strlen(m));
         if (G.c[f].closing == 3) conn_finish(f);
     }
-    if (G.probing && G.probe_conn == i) { G.probing = 0; G.probe_next = 0; }   /* 回连测试请求跟着这条链路丢了: 马上换一条再请 */
+    if (G.probing && G.probe_conn == i) { G.probing = 0; if (G.probe_fam == 6) G.probe6_next = 0; else G.probe_next = 0; }   /* 回连测试请求跟着这条链路丢了: 马上换一条再请 */
     int was_up = c->state == C_UP;
     c->state = C_FREE;
     if (was_up) hop_conn_down(i);
@@ -103,12 +122,12 @@ void conn_finish(int i)
     if (!c->out.len) { p_shut_wr(c->fd); c->closing = 2; }
 }
 
-/* 同一对端有两条链路: 双方各拨一条时留"发起方公钥小的那条", 同一方拨了两条留新的 */
+/* 同一对端同一种协议有两条链路: 双方各拨一条时留"发起方公钥小的那条", 同一方拨了两条留新的 */
 static void dedupe(int i)
 {
     conn_t *c = &G.c[i];
     for (int j = 0; j < MAXC; j++) {
-        if (j == i || G.c[j].state != C_UP || memcmp(G.c[j].peer, c->peer, 32)) continue;
+        if (j == i || G.c[j].state != C_UP || memcmp(G.c[j].peer, c->peer, 32) || G.c[j].fam != c->fam) continue;   /* v4、v6 各留一条 */
         int drop = j;
         if (c->initiator != G.c[j].initiator) {        /* 双方各拨了一条: 两边按同一规则留, 不看当不算可达(否则两边各删一条, 反复重连) */
             int me_small = memcmp(G.id.ed, c->peer, 32) < 0;
@@ -131,6 +150,7 @@ static void on_up(int i)
     }
     logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn == i) { G.t[t].backoff = 1000; snprintf(G.t[t].why, sizeof G.t[t].why, "up"); }
+    for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 == i) { G.t[t].back6 = 1000; snprintf(G.t[t].why6, sizeof G.t[t].why6, "up"); }
     G.last_up_ms = now_ms();
     dedupe(i);
     if (c->state == C_UP) disc_on_up(i);
@@ -334,27 +354,34 @@ static void conn_write(int i)
     if (c->closing == 1 && !c->out.len) { p_shut_wr(c->fd); c->closing = 2; }
 }
 
-static void dial(int t)
+static void dial(int t, int six)
 {
     target_t *tg = &G.t[t];
     char host[64]; int port;
-    tg->next_try = now_ms() + tg->backoff;
-    tg->backoff = tg->backoff < 8000 ? tg->backoff * 2 : 8000;
-    const char *addr = tg->alt[0] && (tg->flip++ & 1) ? tg->alt : tg->addr;
-    if (tg->alt[0]) tg->next_try = now_ms() + 1000;      /* 有两个候选时不退避太久 */
-    if (hostport(addr, host, sizeof host, &port)) { snprintf(tg->why, sizeof tg->why, "地址不对: %s", addr); return; }
-    int fd = p_dial(host, port, 1, tg->why, sizeof tg->why);
+    char *why = six ? tg->why6 : tg->why; size_t wc = six ? sizeof tg->why6 : sizeof tg->why;
+    const char *addr;
+    if (six) {
+        tg->next6 = now_ms() + tg->back6; tg->back6 = tg->back6 < 8000 ? tg->back6 * 2 : 8000;
+        addr = tg->addr6;
+    } else {
+        tg->next_try = now_ms() + tg->backoff;
+        tg->backoff = tg->backoff < 8000 ? tg->backoff * 2 : 8000;
+        addr = tg->alt[0] && (tg->flip++ & 1) ? tg->alt : tg->addr;
+        if (tg->alt[0]) tg->next_try = now_ms() + 1000;  /* 有两个候选时不退避太久 */
+    }
+    if (hostport(addr, host, sizeof host, &port)) { snprintf(why, wc, "地址不对: %s", addr); return; }
+    int fd = p_dial(host, port, 1, why, wc);
     if (fd < 0) return;
     int i = conn_alloc(fd, 1);
     if (i < 0) { p_close(fd); return; }
     conn_t *c = &G.c[i];
-    c->state = C_CONNECTING; c->target = t;
+    c->state = C_CONNECTING; c->target = t; c->fam = addr_fam(addr);
     snprintf(c->addr, sizeof c->addr, "%s", addr);
     member_t *pm = member_by_ed(tg->ed);
     if (!pm) { conn_close(i, "名单里没有"); return; }
     c->pm = pm; memcpy(c->peer, tg->ed, 32);
     hs_init(&c->hs, 1, G.id.xsec, G.id.x, pm->x);
-    tg->conn = i;
+    if (six) tg->conn6 = i; else tg->conn = i;
 }
 
 /* 可达节点接受一条入站链路; fd 也可以由别的程序递进来(中转 8443 上按第一个字节分流后转给我们) */
@@ -363,15 +390,15 @@ static void take_inbound(int fd, const char *addr)
     p_nb(fd);
     int i = conn_alloc(fd, 0);
     if (i < 0) { p_close(fd); return; }
-    G.c[i].state = C_HS;
+    G.c[i].state = C_HS; G.c[i].fam = addr_fam(addr);
     snprintf(G.c[i].addr, sizeof G.c[i].addr, "%s", addr);
     hs_init(&G.c[i].hs, 0, G.id.xsec, G.id.x, NULL);
 }
 
-static void do_accept(void)
+static void do_accept(int lfd)
 {
     char a[80];
-    int fd = p_accept(G.lfd, a, sizeof a);
+    int fd = p_accept(lfd, a, sizeof a);
     if (fd >= 0) take_inbound(fd, a);
 }
 
@@ -398,9 +425,11 @@ static void tick(void)
     }
     for (int t = 0; t < G.nt; t++) {
         target_t *tg = &G.t[t];
+        if (tg->addr6[0] && tg->conn6 < 0 && now >= tg->next6 && conn_by_peer_fam(tg->ed, 6) < 0) dial(t, 1);   /* IPv6 那条: 和 IPv4 同时挂(热备) */
         if (tg->conn >= 0 || now < tg->next_try) continue;
-        if (conn_by_peer(tg->ed) >= 0) continue;        /* 对方已经挂过来了 */
-        dial(t);
+        if (conn_by_peer_fam(tg->ed, 4) >= 0) continue; /* 对方已经挂过来了 */
+        if (!tg->addr[0]) continue;                     /* 只有 IPv6 地址 */
+        dial(t, 0);
     }
     disc_tick();
     disc_pend_tick();
@@ -411,6 +440,8 @@ static void tick(void)
 
 /* 监听(design-v3 §0 第 14 条): 每个节点都开(conf relay off 除外), 当不算可达由回连测试决定(qual.c)
  * 默认 0.0.0.0:8444, conf 的 listen 可覆盖; Linux 上开监听时顺手放行防火墙 INPUT(宿主机常有别家的 DROP) */
+const char *relay_addr6(void) { return G.r6 ? G.pub6 : ""; }
+
 const char *relay_addr(void)
 {
     return G.announce[0] ? G.announce : G.pub_addr[0] ? G.pub_addr : "-";
@@ -435,6 +466,12 @@ void relay_sync(void)
         p_close(G.lfd); G.lfd = -1;
         logf_("停止监听 %s", G.lspec); G.lspec[0] = 0;
     }
+    char w6[80] = "", v6[64];                           /* 监听所有 IPv4 地址时也监听所有 IPv6(本机有 IPv6 才开得起来) */
+    if (G.relay_off) ;
+    else if (G.listen6[0]) snprintf(w6, sizeof w6, "%s", G.listen6);
+    else if (!hostport(want, host, sizeof host, &port) && !strcmp(host, "0.0.0.0") && !local_ip6(v6, sizeof v6)) snprintf(w6, sizeof w6, "[::]:%d", port);
+    if (G.lfd6 >= 0 && strcmp(w6, G.lspec6)) { p_close(G.lfd6); G.lfd6 = -1; logf_("停止监听 %s", G.lspec6); G.lspec6[0] = 0; }
+    if (w6[0] && G.lfd6 < 0 && (G.lfd6 = listen_on(w6)) >= 0) { snprintf(G.lspec6, sizeof G.lspec6, "%s", w6); logf_("监听 %s", w6); }
     if (!want[0] || G.lfd >= 0) return;
     G.lfd = listen_on(want);
     if (G.lfd < 0) { logf_("监听 %s 失败, 稍后再试", want); return; }
@@ -453,7 +490,7 @@ int probe_dial(const char *addr, const uint8_t x[32], int from)
     int i = conn_alloc(fd, 1);
     if (i < 0) { p_close(fd); return -1; }
     conn_t *c = &G.c[i];
-    c->state = C_CONNECTING; c->probe_for = from + 1;
+    c->state = C_CONNECTING; c->probe_for = from + 1; c->fam = addr_fam(addr);
     snprintf(c->addr, sizeof c->addr, "%s", addr);
     hs_init(&c->hs, 1, G.id.xsec, G.id.x, x);
     return 0;
@@ -463,7 +500,7 @@ int mesh_run(const char *dir)
 {
     p_init();
     if (mesh_conf_load(dir)) return 1;
-    G.lfd = G.cfd = -1;
+    G.lfd = G.cfd = G.lfd6 = -1;
     relay_sync();
     if (G.ctl[0]) {
         /* 控制口独占: 拿不到 = 本机已经有一份在跑。升级接班的那份要等上一份让出来(还等不到就清掉残留的旧进程);
@@ -488,6 +525,7 @@ int mesh_run(const char *dir)
     for (;;) {
         int n = 0;
         if (G.lfd >= 0) { p[n].fd = G.lfd; p[n].ev = P_IN; map[n++] = -1; }
+        if (G.lfd6 >= 0) { p[n].fd = G.lfd6; p[n].ev = P_IN; map[n++] = -3; }
         if (G.cfd >= 0) { p[n].fd = G.cfd; p[n].ev = P_IN; map[n++] = -2; }
         for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE) {
             p[n].fd = G.c[i].fd;
@@ -505,7 +543,8 @@ int mesh_run(const char *dir)
             short rev = p[k].rev;
             if (!rev) continue;
             int m = map[k];
-            if (m == -1) do_accept();
+            if (m == -1) do_accept(G.lfd);
+            else if (m == -3) do_accept(G.lfd6);
             else if (m == -2) ctl_accept();
             else if (m < 1000) {
                 if (G.c[m].state == C_FREE || G.c[m].fd != (int)p[k].fd) continue;

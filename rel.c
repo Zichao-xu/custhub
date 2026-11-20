@@ -592,7 +592,7 @@ static char *seed_now(size_t *len)
 {
     if (!G.trust.tlen) return NULL;
     char ml[200]; master_line(ml, sizeof ml);
-    static char hs[MAXM * 120]; hints_text(hs, sizeof hs);   /* 可达地址: 老版本的 join 只认 master / github, 多的行不看 */
+    static char hs[MAXM * 200]; hints_text(hs, sizeof hs);   /* 可达地址: 老版本的 join 只认 master / github, 多的行不看 */
     char *o = malloc(G.trust.tlen + 512 + strlen(hs));
     if (!o) return NULL;
     int n = snprintf(o, 512 + strlen(hs), "custhub-seed v1\nmaster %s\ngithub %s\n%s--trust--\n", ml, G.github[0] ? G.github : "-", hs);

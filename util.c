@@ -107,11 +107,19 @@ int ssh_pub(const char *line, uint8_t pub[32])
     return 0;
 }
 
-int hostport(const char *s, char *host, size_t hcap, int *port)
+int hostport(const char *s, char *host, size_t hcap, int *port)   /* "主机:端口" 或 "[IPv6]:端口" */
 {
-    const char *c = strrchr(s, ':');
-    if (!c || (size_t)(c - s) >= hcap || c == s) return -1;
-    memcpy(host, s, (size_t)(c - s)); host[c - s] = 0;
+    const char *c;
+    if (s[0] == '[') {
+        const char *e = strchr(s, ']');
+        if (!e || e[1] != ':' || (size_t)(e - s - 1) >= hcap || e == s + 1) return -1;
+        memcpy(host, s + 1, (size_t)(e - s - 1)); host[e - s - 1] = 0;
+        c = e + 1;
+    } else {
+        c = strrchr(s, ':');
+        if (!c || (size_t)(c - s) >= hcap || c == s) return -1;
+        memcpy(host, s, (size_t)(c - s)); host[c - s] = 0;
+    }
     char *e; long p = strtol(c + 1, &e, 10);
     if (*e || p <= 0 || p > 65535) return -1;
     *port = (int)p;

@@ -141,62 +141,81 @@ int mtrust_apply(const char *text, size_t len, const char *from)
  * 重启后拿它找人, 发种子时附上(新机器从哪台下载都能连上所有可达的); 地址错了也无妨, 握手认公钥 */
 static void hints_save(void)
 {
-    char p[300], o[MAXM * 120]; size_t n = 0;
+    char p[300], o[MAXM * 200]; size_t n = 0;
     snprintf(p, sizeof p, "%s/peers", G.dir);
     for (int i = 0; i < G.nh; i++) {
         char b[48]; b64_encode(G.h[i].ed, 32, b);
-        n += (size_t)snprintf(o + n, sizeof o - n, "%s %s\n", b, G.h[i].addr);
+        n += (size_t)snprintf(o + n, sizeof o - n, "%s %s%s%s\n", b, G.h[i].addr[0] ? G.h[i].addr : "-", G.h[i].addr6[0] ? " " : "", G.h[i].addr6);
     }
     if (n) m_write(p, o, n); else remove(p);
 }
 
+/* 一行 "<公钥> <IPv4 地址或 -> [<IPv6 地址>]" → 地址簿(种子 hint 行、peers 文件同一格式; 老版本只读前两段) */
+static int hint_line(const char *l, hint_t *h)
+{
+    char kb[64], a4[64] = "", a6[80] = "";
+    memset(h, 0, sizeof *h);
+    if (sscanf(l, "%63s %63s %79s", kb, a4, a6) < 2 || b64_decode(kb, strlen(kb), h->ed, 32) != 32) return -1;
+    if (strcmp(a4, "-") && addr_fam(a4) == 4) snprintf(h->addr, sizeof h->addr, "%s", a4);
+    if (addr_fam(a6) == 6) snprintf(h->addr6, sizeof h->addr6, "%s", a6);
+    return h->addr[0] || h->addr6[0] ? 0 : -1;
+}
+
 void hints_load(void)
 {
-    char p[300], t[MAXM * 120]; G.nh = 0;
+    char p[300], t[MAXM * 200]; G.nh = 0;
     snprintf(p, sizeof p, "%s/peers", G.dir);
     long n = m_read(p, t, sizeof t - 1);
     if (n > 0) {
         t[n] = 0; char *sv = NULL;
-        for (char *l = m_tok(t, "\n", &sv); l && G.nh < MAXM; l = m_tok(NULL, "\n", &sv)) {
-            char kb[64], ad[64]; hint_t h;
-            if (sscanf(l, "%63s %63s", kb, ad) != 2 || b64_decode(kb, strlen(kb), h.ed, 32) != 32) continue;
-            snprintf(h.addr, sizeof h.addr, "%s", ad); G.h[G.nh++] = h;
-        }
+        for (char *l = m_tok(t, "\n", &sv); l && G.nh < MAXM; l = m_tok(NULL, "\n", &sv)) if (!hint_line(l, &G.h[G.nh])) G.nh++;
         return;
     }
     for (int i = 0; i < G.trust.n && G.nh < MAXM; i++)   /* 老机器第一次: 名单里的老地址起头 */
-        if (G.trust.m[i].relay && G.trust.m[i].addr[0]) { memcpy(G.h[G.nh].ed, G.trust.m[i].ed, 32); snprintf(G.h[G.nh].addr, sizeof G.h[0].addr, "%s", G.trust.m[i].addr); G.nh++; }
+        if (G.trust.m[i].relay && G.trust.m[i].addr[0]) { memset(&G.h[G.nh], 0, sizeof G.h[0]); memcpy(G.h[G.nh].ed, G.trust.m[i].ed, 32); snprintf(G.h[G.nh].addr, sizeof G.h[0].addr, "%s", G.trust.m[i].addr); G.nh++; }
     if (G.nh) hints_save();
 }
 
-const char *hint_addr(const uint8_t ed[32])
-{
-    for (int i = 0; i < G.nh; i++) if (!memcmp(G.h[i].ed, ed, 32)) return G.h[i].addr;
-    return NULL;
-}
+static hint_t *hint_find(const uint8_t ed[32]) { for (int i = 0; i < G.nh; i++) if (!memcmp(G.h[i].ed, ed, 32)) return &G.h[i]; return NULL; }
+const char *hint_addr(const uint8_t ed[32]) { hint_t *h = hint_find(ed); return h && h->addr[0] ? h->addr : NULL; }
+const char *hint_addr6(const uint8_t ed[32]) { hint_t *h = hint_find(ed); return h && h->addr6[0] ? h->addr6 : NULL; }
 
-void hint_note(const uint8_t ed[32], const char *addr)
+static void hint_set(const uint8_t ed[32], const char *addr, int six)
 {
-    if (addr && (!addr[0] || !strcmp(addr, "-") || strlen(addr) >= sizeof G.h[0].addr || strchr(addr, ' '))) return;
-    int i = 0; while (i < G.nh && memcmp(G.h[i].ed, ed, 32)) i++;
-    if (!addr) { if (i == G.nh) return; G.h[i] = G.h[--G.nh]; hints_save(); return; }
-    if (i < G.nh && !strcmp(G.h[i].addr, addr)) return;
-    if (i == G.nh) { if (G.nh >= MAXM) return; G.nh++; memcpy(G.h[i].ed, ed, 32); }
-    snprintf(G.h[i].addr, sizeof G.h[i].addr, "%s", addr);
+    if (addr && (!addr[0] || !strcmp(addr, "-") || strchr(addr, ' ') || strchr(addr, ',') || addr_fam(addr) != (six ? 6 : 4))) return;
+    hint_t *h = hint_find(ed);
+    char *f = h ? (six ? h->addr6 : h->addr) : NULL; size_t fc = six ? sizeof G.h[0].addr6 : sizeof G.h[0].addr;
+    if (!addr) {
+        if (!h || !f[0]) return;
+        f[0] = 0;
+        if (!h->addr[0] && !h->addr6[0]) *h = G.h[--G.nh];
+        hints_save(); return;
+    }
+    if (strlen(addr) >= fc || (h && !strcmp(f, addr))) return;
+    if (!h) { if (G.nh >= MAXM) return; h = &G.h[G.nh++]; memset(h, 0, sizeof *h); memcpy(h->ed, ed, 32); f = six ? h->addr6 : h->addr; }
+    snprintf(f, fc, "%s", addr);
     hints_save();
 }
+void hint_note(const uint8_t ed[32], const char *addr) { hint_set(ed, addr, 0); }
+void hint_note6(const uint8_t ed[32], const char *addr6) { hint_set(ed, addr6, 1); }
 
 size_t hints_text(char *o, size_t cap)
 {
     size_t n = 0;                                       /* 本机在前: 新机器就是从这台下载的, 多半连得上 */
-    for (int pass = 0; pass < 2; pass++) for (int i = 0; i < G.nh && n + 120 < cap; i++) {
+    for (int pass = 0; pass < 2; pass++) for (int i = 0; i < G.nh && n + 200 < cap; i++) {
         if (!member_by_ed(G.h[i].ed) || (!memcmp(G.h[i].ed, G.id.ed, 32)) == pass) continue;
         char b[48]; b64_encode(G.h[i].ed, 32, b);
-        n += (size_t)snprintf(o + n, cap - n, "hint %s %s\n", b, G.h[i].addr);
+        n += (size_t)snprintf(o + n, cap - n, "hint %s %s%s%s\n", b, G.h[i].addr[0] ? G.h[i].addr : "-", G.h[i].addr6[0] ? " " : "", G.h[i].addr6);
     }
     if (n < cap) o[n] = 0;
     return n;
 }
+
+int hint_import(const char *line) { hint_t h; if (hint_line(line, &h)) return 0;
+    int got = 0;
+    if (h.addr[0] && (!hint_addr(h.ed) || strcmp(hint_addr(h.ed), h.addr))) { hint_note(h.ed, h.addr); got++; }
+    if (h.addr6[0] && (!hint_addr6(h.ed) || strcmp(hint_addr6(h.ed), h.addr6))) { hint_note6(h.ed, h.addr6); got++; }
+    return got; }
 
 void targets_sync(void)
 {
@@ -206,16 +225,22 @@ void targets_sync(void)
     /* 候选 = 位置记录里声明了可达的成员 + 地址簿里有的(+ 名单里带地址的老写法); 挂之前自己连一次, 握手就是确认 */
     for (int i = 0; i < G.trust.n && G.nt < MAXT; i++) {
         member_t *m = &G.trust.m[i];
-        const char *ha = hint_addr(m->ed);
-        if ((!ed_relay(m->ed) && !ha) || !memcmp(m->ed, G.id.ed, 32)) continue;
+        const char *ha = hint_addr(m->ed), *h6 = hint_addr6(m->ed);
+        rec_t *r = rec_by_ed(m->ed);
+        const char *a6 = r && r->addr6[0] == '[' ? r->addr6 : h6 ? h6 : "";   /* IPv6 可达地址: 记录里自报的先用 */
+        if ((!ed_relay(m->ed) && !ha && !a6[0]) || !memcmp(m->ed, G.id.ed, 32)) continue;
         target_t *t = &G.t[G.nt++];
         int found = 0;
         for (int k = 0; k < no; k++) if (!memcmp(old[k].ed, m->ed, 32)) { *t = old[k]; found = 1; break; }
-        if (!found) { memset(t, 0, sizeof *t); memcpy(t->ed, m->ed, 32); t->conn = -1; t->backoff = 1000; snprintf(t->why, sizeof t->why, "未连"); }
+        if (!found) { memset(t, 0, sizeof *t); memcpy(t->ed, m->ed, 32); t->conn = t->conn6 = -1; t->backoff = t->back6 = 1000; snprintf(t->why, sizeof t->why, "未连"); snprintf(t->why6, sizeof t->why6, "未连"); }
         snprintf(t->name, sizeof t->name, "%s", m->name);
+        if (strcmp(t->addr6, a6)) {
+            if (found && a6[0]) logf_("%s IPv6 地址 %s", m->name, a6);
+            snprintf(t->addr6, sizeof t->addr6, "%s", a6);
+            if (t->conn6 < 0) { t->next6 = 0; t->back6 = 1000; }
+        }
         const char *addr = ha ? ha : m->addr;
-        rec_t *r = rec_by_ed(m->ed);
-        if (r && r->relay && strcmp(r->addr, "-")) addr = r->addr;   /* 可达节点自报的地址先试 */
+        if (r && r->relay && strcmp(r->addr, "-") && addr_fam(r->addr) == 4) addr = r->addr;   /* 可达节点自报的地址先试 */
         /* 自报的可能过时(可达节点又搬了、记录还在), 地址簿 / 老名单的也可能过时: 不同就轮流试 */
         const char *alt = ha && strcmp(addr, ha) ? ha : m->addr[0] && strcmp(addr, m->addr) ? m->addr : "";
         snprintf(t->alt, sizeof t->alt, "%s", alt);
@@ -229,6 +254,9 @@ void targets_sync(void)
     for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE) G.c[i].target = -1;
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn >= 0) {
         if (G.c[G.t[t].conn].state == C_FREE) G.t[t].conn = -1; else G.c[G.t[t].conn].target = t;
+    }
+    for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 >= 0) {
+        if (G.c[G.t[t].conn6].state == C_FREE) G.t[t].conn6 = -1; else G.c[G.t[t].conn6].target = t;
     }
 }
 
@@ -275,7 +303,12 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
     snprintf(r->relays, sizeof r->relays, "%s", f[5]);
     snprintf(r->status, sizeof r->status, "%s", f[6]);
     char *bar = strchr(f[7], '|');                       /* 版本|平台|机器名|系统|机型: 老版本只认前面的版本号 */
-    if (bar) { *bar = 0; snprintf(r->info, sizeof r->info, "%s", bar + 1); }
+    if (bar) {
+        *bar = 0;
+        char *s6 = strstr(bar + 1, "|6=");                /* 机器信息后面跟 |6=<IPv6 地址 / -> */
+        if (s6) { *s6 = 0; snprintf(r->addr6, sizeof r->addr6, "%s", s6 + 3); }
+        snprintf(r->info, sizeof r->info, "%s", bar + 1);
+    }
     snprintf(r->ver, sizeof r->ver, "%s", f[7]);
     memcpy(r->line, line, n); r->line[n] = 0;
     return 0;
@@ -296,10 +329,11 @@ void disc_rec_in(int from, const char *line, size_t n)
     if (cur && r.seq <= cur->seq) return;
     int fresh = !cur;
     if (!cur) { if (G.nr >= MAXR) return; cur = &G.r[G.nr++]; }
-    int changed = fresh ? r.relay : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)));   /* 可达节点声明有变 */
+    int changed = fresh ? (r.relay || r.addr6[0] == '[') : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)) || strcmp(cur->addr6, r.addr6));   /* 可达声明有变 */
     r.rx_ms = now_ms();
     *cur = r;
-    hint_note(r.ed, r.relay ? r.addr : NULL);          /* 地址簿跟着它自己的声明走: 重启 / 发种子用 */
+    hint_note(r.ed, r.relay && addr_fam(r.addr) == 4 ? r.addr : NULL);   /* 地址簿跟着它自己的声明走: 重启 / 发种子用 */
+    hint_note6(r.ed, r.addr6[0] == '[' ? r.addr6 : NULL);
     rel_saw(r.ver);
     if (changed) {
         targets_sync();
@@ -320,7 +354,7 @@ static void clean(char *s) { for (; *s; s++) if (*s == ' ' || *s == ',' || *s ==
 /* 谁都连不上(地址簿空了 / 全过时, 名单也没地址: 比如离线很久、升级前后名单变了): 去发布源取种子, 读里面的可达地址(和更新的名单) */
 static void seed_import(const char *path)
 {
-    static char t[MAXTEXT + MAXM * 120 + 1024];
+    static char t[MAXTEXT + MAXM * 200 + 1024];
     long n = m_read(path, t, sizeof t - 1);
     if (n <= 0 || strncmp(t, "custhub-seed v1\n", 16)) return;
     t[n] = 0;
@@ -330,9 +364,11 @@ static void seed_import(const char *path)
     mtrust_apply(tr + 11, strlen(tr + 11), "发布的种子");
     int got = 0;
     for (char *h = strstr(t, "\nhint "); h; h = strstr(h + 1, "\nhint ")) {
-        char kb[64], ad[64]; uint8_t ed[32];
-        if (sscanf(h + 6, "%63s %63s", kb, ad) != 2 || b64_decode(kb, strlen(kb), ed, 32) != 32 || !member_by_ed(ed) || !memcmp(ed, G.id.ed, 32)) continue;
-        if (!hint_addr(ed) || strcmp(hint_addr(ed), ad)) { hint_note(ed, ad); got++; }
+        char l[300]; size_t ll = strcspn(h + 6, "\n"); if (ll >= sizeof l) continue;
+        memcpy(l, h + 6, ll); l[ll] = 0;
+        uint8_t ed[32]; char kb[64];
+        if (sscanf(l, "%63s", kb) != 1 || b64_decode(kb, strlen(kb), ed, 32) != 32 || !member_by_ed(ed) || !memcmp(ed, G.id.ed, 32)) continue;
+        got += hint_import(l);
     }
     logf_("谁都连不上: 从发布的种子里拿到 %d 个新的可达地址", got);
     if (got) { targets_sync(); for (int k = 0; k < G.nt; k++) if (G.t[k].conn < 0) { G.t[k].next_try = 0; G.t[k].backoff = 1000; } }
@@ -370,8 +406,13 @@ void disc_tick(void)
     if (any_up) G.last_up_ms = now;
     lonely_tick(any_up, now);
     b64_encode(G.id.ed, 32, b64);
-    snprintf(body, sizeof body, "%s %s %s %s %s|%s", G.me_relay ? "relay" : "node",
-             G.me_relay ? relay_addr() : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info());
+    /* 地址: IPv4 可达报 IPv4, 只有 IPv6 可达报 IPv6; IPv6 另外跟在机器信息后面(|6=地址, 有 IPv6 出口但连不进来 = -) */
+    static char v6[64]; static int has6; static int64_t v6_at;
+    if (!v6_at || now - v6_at > 30000) { v6_at = now; has6 = G.announce6[0] || !local_ip6(v6, sizeof v6); }   /* 本机有没有 IPv6 出口, 半分钟看一次 */
+    char six[96] = "";
+    if (G.r6) snprintf(six, sizeof six, "|6=%s", G.pub6); else if (has6) snprintf(six, sizeof six, "|6=-");
+    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s", G.me_relay ? "relay" : "node",
+             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {
         uint64_t wall = (uint64_t)wall_ms();
         G.myseq = wall > G.myseq ? wall : G.myseq + 1;
@@ -455,6 +496,8 @@ int mesh_conf_load(const char *dir)
         if (!strcmp(k, "name")) snprintf(G.name, sizeof G.name, "%s", v);
         else if (!strcmp(k, "listen")) snprintf(G.listen, sizeof G.listen, "%s", v);
         else if (!strcmp(k, "announce")) snprintf(G.announce, sizeof G.announce, "%s", v);
+        else if (!strcmp(k, "listen6")) snprintf(G.listen6, sizeof G.listen6, "%s", v);
+        else if (!strcmp(k, "announce6")) snprintf(G.announce6, sizeof G.announce6, "%s", v);
         else if (!strcmp(k, "ctl")) snprintf(G.ctl, sizeof G.ctl, "%s", v);
         else if (!strcmp(k, "fallback")) snprintf(G.fallback, sizeof G.fallback, "%s", v);
         else if (!strcmp(k, "dump")) G.dump = atoi(v);

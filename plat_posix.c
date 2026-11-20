@@ -121,6 +121,7 @@ int p_listen(const char *host, int port)
     int fd = socket(ai->ai_family, SOCK_STREAM, 0);
     if (fd < 0) { freeaddrinfo(ai); return -1; }
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (ai->ai_family == AF_INET6) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one);   /* v4、v6 各开一个监听 */
     if (bind(fd, ai->ai_addr, ai->ai_addrlen) || listen(fd, 64)) { freeaddrinfo(ai); close(fd); return -1; }
     freeaddrinfo(ai);
     p_nb(fd);
@@ -135,7 +136,7 @@ int p_accept(int lfd, char *peer, size_t pcap)
     char h[64] = "?"; int port = 0;
     if (sa.ss_family == AF_INET) { struct sockaddr_in *s4 = (void *)&sa; inet_ntop(AF_INET, &s4->sin_addr, h, sizeof h); port = ntohs(s4->sin_port); }
     else if (sa.ss_family == AF_INET6) { struct sockaddr_in6 *s6 = (void *)&sa; inet_ntop(AF_INET6, &s6->sin6_addr, h, sizeof h); port = ntohs(s6->sin6_port); }
-    if (peer) snprintf(peer, pcap, "%s:%d", h, port);
+    if (peer) snprintf(peer, pcap, strchr(h, ':') ? "[%s]:%d" : "%s:%d", h, port);   /* IPv6 带方括号 */
     p_nb(fd);
     return fd;
 }
@@ -147,6 +148,9 @@ void p_open_firewall(int port)
     snprintf(cmd, sizeof cmd, "command -v iptables >/dev/null 2>&1 && { iptables -C INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null"
              " || iptables -I INPUT 1 -p tcp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
     if (system(cmd)) { /* 没有 iptables 或没权限: 不影响 */ }
+    snprintf(cmd, sizeof cmd, "command -v ip6tables >/dev/null 2>&1 && { ip6tables -C INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null"
+             " || ip6tables -I INPUT 1 -p tcp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
+    if (system(cmd)) { /* 同上, IPv6 */ }
     /* OpenWrt fw4(nftables): iptables 那条进不了 fw4 的 input_wan, WAN 进来的照样被拒; 写一条 uci 规则(重载后还在) + 当场插进去 */
     char fw[1400];
     snprintf(fw, sizeof fw, "[ -x /sbin/fw4 ] && command -v uci >/dev/null 2>&1 && command -v nft >/dev/null 2>&1 && {"
@@ -414,6 +418,19 @@ int p_local_ip(const char *peer_host, char *out, size_t cap)
         getsockname(fd, (struct sockaddr *)&a, &l) || !inet_ntop(AF_INET, &a.sin_addr, out, (socklen_t)cap)) { close(fd); return -1; }
     close(fd);
     return 0;
+}
+
+int p_local_ip6(char *out, size_t cap)
+{
+    struct sockaddr_in6 a; socklen_t l = sizeof a;
+    int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    memset(&a, 0, sizeof a); a.sin6_family = AF_INET6; a.sin6_port = htons(9);
+    inet_pton(AF_INET6, "2001:4860:4860::8888", &a.sin6_addr);   /* 不发包, 只问路由表用哪个源地址 */
+    int ok = !connect(fd, (struct sockaddr *)&a, sizeof a) && !getsockname(fd, (struct sockaddr *)&a, &l)
+             && (a.sin6_addr.s6_addr[0] & 0xe0) == 0x20 && inet_ntop(AF_INET6, &a.sin6_addr, out, (socklen_t)cap);
+    close(fd);
+    return ok ? 0 : -1;
 }
 
 int p_local_ipv4s(char (*out)[48], int max)

@@ -147,11 +147,15 @@ void join_line(char *out, size_t cap)
 {
     const char *best = NULL, *bv = "0.3.11"; char self[80] = "";
     int64_t now = now_ms();
-    if (G.me_relay && ver_cmp(CH_VERSION, bv) >= 0) { snprintf(self, sizeof self, "%s", relay_addr()); best = self; bv = CH_VERSION; }
-    for (int i = 0; i < G.nr; i++) {
-        rec_t *r = &G.r[i];
-        if (!r->relay || !strcmp(r->addr, "-") || now - r->rx_ms > 180000 || !member_by_ed(r->ed)) continue;
-        if (ver_cmp(r->ver, bv) > 0 || (!best && ver_cmp(r->ver, bv) >= 0)) { best = r->addr; bv = r->ver; }
+    for (int six = 0; six < 2 && !best; six++) {        /* IPv4 地址优先(新机器多半只有 IPv4), 都没有才用 IPv6 的 */
+        const char *ma = six ? relay_addr6() : G.r4 ? relay_addr() : "";
+        if (ma[0] && strcmp(ma, "-") && ver_cmp(CH_VERSION, bv) >= 0) { snprintf(self, sizeof self, "%s", ma); best = self; bv = CH_VERSION; }
+        for (int i = 0; i < G.nr; i++) {
+            rec_t *r = &G.r[i];
+            const char *a = six ? (r->addr6[0] == '[' ? r->addr6 : "") : (r->relay && addr_fam(r->addr) == 4 ? r->addr : "");
+            if (!a[0] || !strcmp(a, "-") || now - r->rx_ms > 180000 || !member_by_ed(r->ed)) continue;
+            if (ver_cmp(r->ver, bv) > 0 || (!best && ver_cmp(r->ver, bv) >= 0)) { best = a; bv = r->ver; }
+        }
     }
     if (best) {
         snprintf(out, cap, "http://%s\npowershell -c \"start powershell -verb runas -args '-NoExit -c iex(New-Object Net.WebClient).DownloadString(''http://%s/ps1'')'\"; curl -fsSL http://%s/sh|sh\n", best, best, best);
@@ -167,10 +171,14 @@ void ls_text(buf_t *o)
     add(o, "本机 %s(%s…) %s, 名单 v%ld, 版本 %s%s\n", G.name, id, G.me_relay ? "可达" : "节点", G.trust.ver, CH_VERSION,
         member_by_ed(G.id.ed) ? "" : ", 还没被批准");
     add(o, "端口: %s\n", G.port_state[0] ? G.port_state : "检测中");
+    if (G.port6_state[0]) add(o, "IPv6: %s\n", G.port6_state);
     add(o, "挂着:\n");
     for (int t = 0; t < G.nt; t++) {
         int c = conn_by_peer(G.t[t].ed);
-        add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr, c >= 0 ? "通" : G.t[t].why);
+        int c4 = conn_by_peer_fam(G.t[t].ed, 4), c6 = conn_by_peer_fam(G.t[t].ed, 6);
+        (void)c;
+        if (G.t[t].addr[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr, c4 >= 0 ? "通" : G.t[t].why);
+        if (G.t[t].addr6[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr6, c6 >= 0 ? "通" : G.t[t].why6);
     }
     add(o, "链路:\n");
     for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP)
@@ -179,8 +187,8 @@ void ls_text(buf_t *o)
     int64_t now = now_ms();
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i];
-        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)\n", name_of(r->ed), r->relay ? "可达" : "节点",
-            r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000));
+        add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)%s%s\n", name_of(r->ed), r->relay ? "可达" : "节点",
+            r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000), r->addr6[0] ? " IPv6=" : "", r->addr6);
     }
 }
 

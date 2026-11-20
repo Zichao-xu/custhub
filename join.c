@@ -179,15 +179,16 @@ int cmd_join3(int argc, char **argv)
     /* 地址簿: 种子里附的可达地址, 本机还没记过的补上(重复接入时手上的更新, 不覆盖) */
     sep_join(p, sizeof p, node, "peers");
     {
-        static char pb[MAXM * 120 * 2]; long pn = m_read(p, pb, sizeof pb / 2); size_t pl = pn > 0 ? (size_t)pn : 0; int add = 0;
+        static char pb[MAXM * 200 * 2]; long pn = m_read(p, pb, sizeof pb / 2); size_t pl = pn > 0 ? (size_t)pn : 0; int add = 0;
         if (pl && pb[pl - 1] != '\n') pb[pl++] = '\n';
         pb[pl] = 0;
         for (const char *h = strstr(seed, "\nhint "); h; h = strstr(h + 1, "\nhint ")) {
-            char kb[64], ad[64], kk[70];
-            if (sscanf(h + 6, "%63s %63s", kb, ad) != 2) continue;
+            char kb[64], kk[70], l[300]; size_t ll = strcspn(h + 6, "\n");   /* "<公钥> <v4|-> [<v6>]" 原样记下 */
+            if (ll >= sizeof l || sscanf(h + 6, "%63s", kb) != 1) continue;
+            memcpy(l, h + 6, ll); l[ll] = 0;
             snprintf(kk, sizeof kk, "%s ", kb);
-            if (strstr(pb, kk) || pl + 140 > sizeof pb) continue;
-            pl += (size_t)snprintf(pb + pl, sizeof pb - pl, "%s %s\n", kb, ad); add++;
+            if (strstr(pb, kk) || pl + ll + 2 > sizeof pb) continue;
+            pl += (size_t)snprintf(pb + pl, sizeof pb - pl, "%s\n", l); add++;
         }
         if (add) { m_write(p, pb, pl); printf("  可达地址 %d 个(来自种子)\n", add); }
     }

@@ -61,10 +61,11 @@ void ed_to_x(const uint8_t ed[32], uint8_t x[32]);
 /* ---------- 名单 / 位置记录 (disc.c) ---------- */
 typedef struct { char name[32]; uint8_t ed[32], x[32]; int relay; char addr[64], host[64]; } member_t;   /* host: 批准时记下的机器名(名单行末 host=…, 只作备注) */
 typedef struct { long ver; int n; member_t m[MAXM]; char text[MAXTEXT]; size_t tlen; } trust_t;
-typedef struct { uint8_t ed[32]; char addr[64]; } hint_t;   /* 地址簿: 见过的可达地址(本机也在内), 存 <目录>/peers, 重启后拿它找人 */
+typedef struct { uint8_t ed[32]; char addr[64], addr6[80]; } hint_t;   /* addr6: IPv6 可达地址(没有 "") */   /* 地址簿: 见过的可达地址(本机也在内), 存 <目录>/peers, 重启后拿它找人 */
 typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
-    int relay; char addr[64], relays[160], status[320], ver[16], info[200];   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
+    int relay; char addr[64], relays[160], status[320], ver[16], info[200];
+    char addr6[80];               /* "" = 没报 IPv6; "-" = 有 IPv6 出口但连不进来; "[…]:端口" = IPv6 可达 */   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
     char line[800];
 } rec_t;
 
@@ -79,6 +80,7 @@ typedef struct { uint8_t key[32]; int to_all, nto; uint8_t to[PASSTO][32]; char 
 enum { C_FREE, C_CONNECTING, C_HS, C_UP };
 typedef struct {
     int state, fd, initiator, target, peer_relay;
+    int fam;                      /* 4 / 6: 这条链路走的是 IPv4 还是 IPv6(同一对端两种各留一条, 热备; 收发优先 v6) */
     int closing;                  /* 1 = 发完就断, 不收任何帧; 3 = 名单外节点的报到链路: 发了名单, 再等一会儿它的回连测试请求 */
     int probe_for;                /* 回连测试的拨号(本机替别人测): 请求方链路下标 + 1; 0 = 不是 */
     int probe_in;                 /* 对方拨过来只为测本机端口: 握手完就断 */
@@ -109,6 +111,7 @@ typedef struct {
 typedef struct {
     uint8_t ed[32]; char name[32], addr[64], alt[64], why[96];   /* addr: 可达节点自报(没有就是名单); alt: 名单里的线索(与 addr 不同时轮流试) */
     int conn, flip; int64_t next_try, backoff;
+    char addr6[80], why6[96]; int conn6; int64_t next6, back6;   /* IPv6 那条(对方 IPv6 可达才有), 和 IPv4 那条同时挂着 */
 } target_t;
 
 typedef struct { int fd, authed; char line[48 * 1024]; size_t n; int64_t born; } ctlq_t;   /* 一行令牌 + 一行命令(TRUSTPUT 带整份名单) */
@@ -133,7 +136,12 @@ typedef struct {
     int relay_off;                /* conf: relay off = 本机不算可达, 也不开监听 */
     int probing, probe_conn; int64_t probe_next, probe_deadline, ok_since;
     char pub_addr[64];            /* 回连测试通过的对外地址 */
+    int lfd6; char lspec6[80];    /* IPv6 监听(本机有 IPv6 才开) */
+    char listen6[80], announce6[80];   /* conf: listen6 / announce6(同 listen / announce, IPv6 那个) */
+    int r4, r6;                   /* IPv4 / IPv6 各自可达; me_relay = 任一可达 */
+    char pub6[80]; int64_t ok6_since, probe6_next; int probe_fam;   /* IPv6 回连测试: 地址、观察起点; 当前这次测的是 4 还是 6 */
     char port_state[320];         /* 端口检测结果(给 ls / join 看) */
+    char port6_state[320];        /* IPv6 那一份 */
     int upnp_off, upnp_port;      /* conf: upnp off; 路由器上映射出去的外部端口(0 = 没映射) */
     char github[100];             /* conf: github 仓库(owner/name), 发布物从它的 Release 取 */
     char relbase[200];            /* conf: release_base <网址>, 发布物从这里取(自建发布源 / 镜像), 取代 GitHub 那一串 */
@@ -172,7 +180,11 @@ const char *relay_addr(void);
 int  conn_send(int i, int type, uint32_t sid, const void *pl, size_t n);
 void conn_close(int i, const char *why);
 void conn_finish(int i);                                 /* 发完已排队的就半关 */
-int  conn_by_peer(const uint8_t ed[32]);
+int  conn_by_peer(const uint8_t ed[32]);                 /* 到对端的链路: 有 IPv6 的先用 */
+int  conn_by_peer_fam(const uint8_t ed[32], int fam);
+int  local_ip6(char *out, size_t cap);                   /* 本机 IPv6 出口地址(测试可用 CUSTHUB_IP6 指定); 0 有 */
+int  addr_fam(const char *a);                            /* "[…]:端口" → 6, 其余 → 4 */
+const char *relay_addr6(void);                           /* 本机 IPv6 可达地址, 没有 "" */
 uint32_t conn_new_sid(int i);
 /* hop.c */
 void hop_frame(int i, int type, uint32_t sid, const uint8_t *pl, size_t n);
@@ -199,7 +211,10 @@ void disc_pend_tick(void);
 void hints_load(void);                                   /* 读 <目录>/peers; 没有就从名单里的老地址起头 */
 void hint_note(const uint8_t ed[32], const char *addr);  /* 记下 / 更新一个可达地址(addr NULL = 删掉) */
 const char *hint_addr(const uint8_t ed[32]);
-size_t hints_text(char *o, size_t cap);                  /* 种子里的 "hint <公钥> <地址>" 行(只含名单成员) */
+const char *hint_addr6(const uint8_t ed[32]);
+void hint_note6(const uint8_t ed[32], const char *addr6);   /* 同上, IPv6 那个 */
+size_t hints_text(char *o, size_t cap);
+int  hint_import(const char *line);                       /* "<公钥> <v4|-> [<v6>]" 记进地址簿, 返回新增 / 变了几个 */                  /* 种子里的 "hint <公钥> <地址>" 行(只含名单成员) */
 int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
 /* qual.c: 可达自检 */
 void qual_tick(void);

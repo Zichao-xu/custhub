@@ -156,7 +156,7 @@ static void ep_frame(int si, int type, const uint8_t *pl, size_t n)
             }
             s->up = 1;
             if (p_send(s->fd, "OK\n", 3) != 3) { st_close(si, "本地客户端已走"); return; }
-            logf_("已连上 %s %s(经 %s)", name_of(s->dst), s->req, name_of(G.c[s->conn].peer));
+            logf_("已连上 %s %s(经 %s%s)", name_of(s->dst), s->req, name_of(G.c[s->conn].peer), G.c[s->conn].fam == 6 ? ", IPv6" : "");
             return;
         }
         {
