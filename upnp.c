@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static struct { char ctl_host[64], ctl_path[256], svc[96], lan_ip[48]; int ctl_port, ext, tried, perm; int64_t next; } U;
+static struct { char ctl_host[64], ctl_path[256], svc[96], lan_ip[48]; int ctl_port, ext, uext, tried, perm; int64_t next; } U;
 
 static int64_t env_s(const char *k, long def)
 {
@@ -165,7 +165,16 @@ static int map_now(int in, char *why, size_t wcap)
     int fault = 0, lease = U.perm ? 0 : 3600;
     for (int k = 0; k < 16; k++) {
         int ext = (U.ext ? U.ext : 8444) + (U.ext ? 0 : k);
-        if (!add_map(ext, in, lease, &fault, "TCP")) { int f2 = 0; G.upnp_udp = !add_map(ext, in, lease, &f2, "UDP"); return ext; }   /* UDP 同一个外部端口(UDP 链路用; 不成也不影响 TCP) */
+        if (!add_map(ext, in, lease, &fault, "TCP")) {   /* UDP: 先试和 TCP 同一个外部端口, 占了(路由器自己用着 / 别人映射了)就顺延; 不成也不影响 TCP */
+            int f2 = 0, ue = U.uext ? U.uext : ext; G.upnp_udp = 0;
+            for (int j = 0; j < 16 && !G.upnp_udp; j++) {
+                if (!add_map(ue, in, lease, &f2, "UDP")) { G.upnp_udp = ue; U.uext = ue; break; }
+                if (f2 != 718 && f2 != 729) break;
+                ue = ext + j + 1;
+            }
+            if (!G.upnp_udp) U.uext = 0;
+            return ext;
+        }
         if (fault == 725 && lease) { lease = 0; U.perm = 1; k--; continue; }   /* 只认永久映射: 记住, 续租直接用永久 */
         if ((fault != 718 && fault != 729) || U.ext) break;          /* 718 被别的映射占了 / 729 被路由器自己用着(比如路由器上也跑着本程序): 换下一个 */
     }
@@ -175,7 +184,7 @@ static int map_now(int in, char *why, size_t wcap)
 }
 
 /* 每轮调一次: 到点就映射 / 续租; 结果在 G.upnp_port(0 = 没映射) */
-void upnp_reset(void) { U.next = 0; U.ctl_host[0] = 0; U.ext = 0; }
+void upnp_reset(void) { U.next = 0; U.ctl_host[0] = 0; U.ext = 0; U.uext = 0; }
 
 static void del_map(int ext, const char *proto)
 {
@@ -198,7 +207,7 @@ void upnp_repair(void)
     if (!G.upnp_port || !U.ctl_host[0] || (last && now - last < 300000)) return;
     last = now;
     logf_("UPnP: 路由器说映射着(TCP %d), 回连却不通: 删掉重新申请", G.upnp_port);
-    del_map(G.upnp_port, "TCP"); del_map(G.upnp_port, "UDP");
+    del_map(G.upnp_port, "TCP"); if (G.upnp_udp) del_map(G.upnp_udp, "UDP");
     U.next = 0;                                          /* 下一轮马上重新申请(还是同一个外部端口) */
 }
 

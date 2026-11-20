@@ -99,11 +99,15 @@ void punch_udp_reply(const char *from, const char *addr)
 static void ustun_tick(int64_t now)
 {
     if (G.ufd < 0) { G.upunch[0] = 0; return; }
-    char ph[64]; int pp;                                 /* UPnP 的 UDP 也映射上了: 直接报它(固定、不用打洞就进得来), 不用查 */
-    if (G.upnp_port && G.upnp_udp && !hostport(relay_addr(), ph, sizeof ph, &pp)) {
-        char a[80]; snprintf(a, sizeof a, "%s:%d", ph, G.upnp_port);
-        if (strcmp(G.upunch, a)) { logf_("UDP 打洞端点: %s(UPnP 映射)", a); snprintf(G.upunch, sizeof G.upunch, "%s", a); G.mypub_ms = 0; }
+    char ph[64]; int pp;                                 /* UPnP 的 UDP 映射回连验证过: 直接报它(固定、别人随时发得进来, 不用打洞), 不用查 */
+    if (G.uin_ok && G.upnp_udp && !hostport(relay_addr(), ph, sizeof ph, &pp)) {
+        char a[80]; snprintf(a, sizeof a, "%s:%d", ph, G.upnp_udp);
+        if (strcmp(G.upunch, a)) { logf_("UDP 地址: %s(UPnP 映射, 验证过)", a); snprintf(G.upunch, sizeof G.upunch, "%s", a); G.mypub_ms = 0; }
         usym = 0; udl = 0; return;
+    }
+    if (!G.uin_ok && G.upnp_udp && !hostport(relay_addr(), ph, sizeof ph, &pp)) {   /* 映射没验证过 / 验证不通: 不能再报它, 退回查映射 */
+        char a[80]; snprintf(a, sizeof a, "%s:%d", ph, G.upnp_udp);
+        if (!strcmp(G.upunch, a)) { G.upunch[0] = 0; G.mypub_ms = 0; next_uq = 0; }
     }
     if (udl) {
         if (now < udl && nug < nua) return;
@@ -193,6 +197,7 @@ void punch_desc(char *tcp, char *udp, size_t cap)
     else if (G.punch[0]) snprintf(tcp, cap, "%s(映射不随目的地变, 能打洞)", G.punch);
     else snprintf(tcp, cap, "%s", sym_logged ? "对称型 NAT, 打不了" : "还没查到");
     if (G.ufd < 0) snprintf(udp, cap, "没开 UDP");
+    else if (G.uin_ok) snprintf(udp, cap, "不用(UDP 入站开着)");
     else if (G.upunch[0]) snprintf(udp, cap, "%s(映射不随目的地变, 能打洞)", G.upunch);
     else snprintf(udp, cap, "%s", usym ? "对称型 NAT, 打不了" : "还没查到(可达节点的 UDP 不通?)");
 }

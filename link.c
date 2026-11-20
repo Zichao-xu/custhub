@@ -194,6 +194,7 @@ static void on_frame(int i, const uint8_t *f, size_t n)
     case F_PROBE: qual_probe_in(i, pl, pn); break;
     case F_PROBEA: qual_probe_ans(i, pl, pn); break;
     case F_WHO:   conn_send(i, F_WHOA, 0, G.c[i].addr, strlen(G.c[i].addr)); break;   /* 本机看对方是什么地址 */
+    case F_UPROBE: qual_uprobe_in(i, pl, pn); break;
     case F_WHOA:  { char a[80]; size_t k = pn < sizeof a - 1 ? pn : sizeof a - 1; memcpy(a, pl, k); a[k] = 0; punch_who_ans(i, a); } break;
     default:      hop_frame(i, type, sid, pl, pn); break;
     }

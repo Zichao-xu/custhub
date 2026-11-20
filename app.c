@@ -199,8 +199,10 @@ void netcheck_text(buf_t *o)
     char ips[16][48], tp[200], up[200], v6[64]; int ni = p_local_ipv4s(ips, 16);
     add(o, "本机 %s, 能力: %s\n", G.name, G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] || G.upunch[0] ? "P2P" : "跳转");
     add(o, "本机地址:"); for (int k = 0; k < ni; k++) add(o, " %s", ips[k]); add(o, "%s\n", ni ? "" : " (没有)");
-    add(o, "IPv4 入站: %s\n", G.port_state[0] ? G.port_state : "检测中");
-    add(o, "UPnP: %s\n", G.upnp_off ? "关(conf upnp off)" : G.upnp_port ? "已映射" : G.upnp_why[0] ? G.upnp_why : "检测中");
+    add(o, "TCP 入站: %s\n", G.port_state[0] ? G.port_state : "检测中");
+    add(o, "UDP 入站: %s\n", G.ufd < 0 ? "没开 UDP" : G.uin_state[0] ? G.uin_state : G.upnp_port ? "UPnP 没映射上 UDP" : "没有映射(连不进来的靠打洞)");
+    char um[80]; snprintf(um, sizeof um, G.upnp_udp ? "已映射 TCP %d、UDP %d" : "已映射 TCP %d(UDP 没映射上)", G.upnp_port, G.upnp_udp);
+    add(o, "UPnP: %s\n", G.upnp_off ? "关(conf upnp off)" : G.upnp_port ? um : G.upnp_why[0] ? G.upnp_why : "检测中");
     add(o, "IPv6: %s\n", local_ip6(v6, sizeof v6) ? "本机没有公网 IPv6" : G.port6_state[0] ? G.port6_state : v6);
     punch_desc(tp, up, sizeof tp);
     add(o, "TCP 打洞: %s\nUDP 打洞: %s\n", tp, up);
@@ -226,7 +228,8 @@ void ls_text(buf_t *o)
     if (G.port6_state[0]) add(o, "IPv6: %s\n", G.port6_state);
     add(o, "能力: %s\n", G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] || G.upunch[0] ? "P2P" : "跳转");   /* 本机自己的能力(界面用, 和别人从记录里算的一致) */
     if (!G.r4 && G.punch_port) add(o, "打洞: %s\n", G.punch[0] ? G.punch : "没有可用的打洞端点(还在查, 或对称型 NAT)");
-    if (G.ufd >= 0) add(o, "UDP 打洞: %s\n", G.upunch[0] ? G.upunch : "没有可用的打洞端点(还在查, 可达节点 UDP 不通, 或对称型 NAT)");
+    if (G.ufd >= 0 && G.uin_state[0]) add(o, "UDP 入站: %s\n", G.uin_state);
+    if (G.ufd >= 0 && !G.uin_ok) add(o, "UDP 打洞: %s\n", G.upunch[0] ? G.upunch : "没有可用的打洞端点(还在查, 可达节点 UDP 不通, 或对称型 NAT)");
     add(o, "挂着:\n");
     for (int t = 0; t < G.nt; t++) {
         int c = conn_by_peer(G.t[t].ed);

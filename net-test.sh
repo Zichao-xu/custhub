@@ -32,7 +32,7 @@ ok "UDP 热备那条也测出延迟" '$M ping "$T/x" r | grep -qE "^  . UDP .*�
 ok "名单里没有的名字报错" '! $M ping "$T/x" nobody 2>&1 | grep -q 走直连'
 
 echo "== 2 custhub netcheck"
-ok "netcheck 有入站、UPnP、IPv6、打洞、直连几项" 'o=$($M netcheck "$T/x"); for k in "能力:" "IPv4 入站:" "UPnP:" "IPv6:" "TCP 打洞:" "UDP 打洞:" "直连:"; do echo "$o" | grep -q "$k" || exit 1; done'
+ok "netcheck 有入站、UPnP、IPv6、打洞、直连几项" 'o=$($M netcheck "$T/x"); for k in "能力:" "TCP 入站:" "UDP 入站:" "UPnP:" "IPv6:" "TCP 打洞:" "UDP 打洞:" "直连:"; do echo "$o" | grep -q "$k" || exit 1; done'
 ok "netcheck 列出到 r 的直连和延迟" '$M netcheck "$T/x" | grep -qE "^  r +TCP IPv4 [0-9]+ms"'
 
 echo "== 3 网络变了马上重查重连"

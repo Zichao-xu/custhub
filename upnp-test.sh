@@ -34,6 +34,23 @@ def unforward(ext):
         try: l.shutdown(socket.SHUT_RDWR)                # 先唤醒卡在 accept 里的线程, 端口才放得出来
         except OSError: pass
         l.close()
+ufwd = {}
+def uforward(ext, inner):                           # UDP: 外部端口收到的包转给节点的 UDP 端口(验 UDP 入站只要单向)
+    if ext in ufwd: return
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); u.bind(("127.0.0.1", ext)); ufwd[ext] = u
+    o = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    def run():
+        while True:
+            try: d, _ = u.recvfrom(4096)
+            except OSError: return
+            o.sendto(d, ("127.0.0.1", inner))
+    threading.Thread(target=run, daemon=True).start()
+def uunforward(ext):
+    u = ufwd.pop(ext, None)
+    if u:
+        try: u.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+        u.close()
 def forward(ext, inner):
     if ext in fwd: return
     l = socket.socket(); l.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); l.bind(("127.0.0.1", ext)); l.listen(8); fwd[ext] = l
@@ -65,6 +82,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/drop":                       # 模拟路由器防火墙重载: 转发规则没了, 登记还在
             for e in list(fwd): unforward(e)
+            for e in list(ufwd): uunforward(e)
             say("drop"); return self.out(200, "ok")
         self.out(200, DESC)
     def do_POST(self):
@@ -73,13 +91,14 @@ class H(http.server.BaseHTTPRequestHandler):
         if "DeletePortMapping" in x:
             e = int(g("NewExternalPort")); leases.discard((e, g("NewProtocol")))
             if g("NewProtocol") == "TCP": unforward(e)
+            else: uunforward(e)
             say("del", e, g("NewProtocol")); return self.out(200, "<ok/>")
         ext, inner, lease, cli = int(g("NewExternalPort")), int(g("NewInternalPort")), int(g("NewLeaseDuration")), g("NewInternalClient")
         if ext == 8444: say("map", ext, inner, lease, cli, "-> 718"); return self.out(500, fault(718))
         if lease != 0: say("map", ext, inner, lease, cli, "-> 725"); return self.out(500, fault(725))
         proto = g("NewProtocol")
         say("map", ext, inner, lease, cli, "-> ok")
-        if proto == "TCP" and (ext, proto) not in leases: forward(ext, inner)   # 新登记才装转发; 续租不动
+        if (ext, proto) not in leases: (forward if proto == "TCP" else uforward)(ext, inner)   # 新登记才装转发; 续租不动
         leases.add((ext, proto)); self.out(200, "<ok/>")
 http.server.ThreadingHTTPServer(("127.0.0.1", hp), H).serve_forever()
 PY
@@ -107,6 +126,10 @@ echo "$o" | grep -q "已开启(UPnP 自动映射): 127.0.0.1:8445" && ok "回连
 sleep 4
 [ "$(grep -c "map 8445 $PD 0 .* -> ok" "$T/router.log")" -ge 2 ] && ok "按租期续了映射" || ng "没续租: $(grep -c ok "$T/router.log")"
 
+wait_for 15 sh -c "$M netcheck $T/d | grep -q '^UDP 入站: 已开启(UPnP 映射): 127.0.0.1:8445'"
+$M netcheck "$T/d" | grep -q "^UDP 入站: 已开启(UPnP 映射): 127.0.0.1:8445" && ok "UDP 也映射上, 回连验证过才算 UDP 入站开着" || ng "UDP 入站: $($M netcheck "$T/d" | grep -E 'UDP|UPnP')"
+$M netcheck "$T/d" | grep -q "^UPnP: 已映射 TCP 8445、UDP 8445" && ok "netcheck 写明映射了哪两个端口" || ng "UPnP: $($M netcheck "$T/d" | grep UPnP)"
+
 echo "== 2 路由器的转发规则没了(防火墙重载): 删掉重新申请"
 n0=$(grep -c "map 8445 $PD 0 .* -> ok" "$T/router.log")
 curl -s "http://127.0.0.1:$HTTP/drop" >/dev/null
@@ -114,6 +137,8 @@ wait_for 20 grep -q "UPnP: 路由器说映射着(TCP 8445), 回连却不通: 删
 grep -q "UPnP: 路由器说映射着(TCP 8445), 回连却不通: 删掉重新申请" "$T/d.log" && grep -q "^del 8445 TCP" "$T/router.log" && ok "回连不通: 先删掉映射" || ng "没删: $(tail -3 "$T/router.log"; grep UPnP "$T/d.log" | tail -2)"
 wait_for 20 sh -c "[ \$(grep -c 'map 8445 $PD 0 .* -> ok' $T/router.log) -gt $n0 ] && $M ls $T/d | grep -q '已开启(UPnP 自动映射)'"
 $M ls "$T/d" | grep -q "已开启(UPnP 自动映射): 127.0.0.1:8445" && ok "重新申请后转发规则回来了, 又连得进来" || ng "没恢复: $($M ls "$T/d" | grep 端口)"
+wait_for 20 sh -c "$M netcheck $T/d | grep -q '^UDP 入站: 已开启'"
+$M netcheck "$T/d" | grep -q "^UDP 入站: 已开启" && ok "UDP 入站也跟着恢复" || ng "UDP 入站: $($M netcheck "$T/d" | grep 'UDP 入站')"
 
 echo "== 3 没有路由器"
 wait_for 15 sh -c "$M ls $T/n | grep -q '不通'"

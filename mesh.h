@@ -102,7 +102,7 @@ typedef struct {
     uint32_t next_sid;
 } conn_t;
 
-enum { F_PING = 1, F_PONG, F_REC, F_TRUST, F_OPEN, F_DATA, F_FIN, F_CLOSE, F_CREDIT, F_PENDQ, F_PENDA, F_PROBE, F_PROBEA, F_WHO, F_WHOA };   /* F_WHO: 你看我是什么地址(查映射, 任何直连的成员都能答) */
+enum { F_PING = 1, F_PONG, F_REC, F_TRUST, F_OPEN, F_DATA, F_FIN, F_CLOSE, F_CREDIT, F_PENDQ, F_PENDA, F_PROBE, F_PROBEA, F_WHO, F_WHOA, F_UPROBE };   /* F_UPROBE: 请对方往本机 UDP 入站地址发个包(验证 UDP 入站) */   /* F_WHO: 你看我是什么地址(查映射, 任何直连的成员都能答) */
 enum { S_FREE, S_FWD, S_INIT, S_RESP };
 typedef struct {
     int kind, conn, pair, fd, up, lfin, rfin;
@@ -151,7 +151,8 @@ typedef struct {
     char port_state[320];         /* 端口检测结果(给 ls / join 看) */
     char port6_state[320];        /* IPv6 那一份 */
     int upnp_off, upnp_port;      /* conf: upnp off; 路由器上映射出去的外部端口(0 = 没映射) */
-    int upnp_udp;                 /* 同一个外部端口的 UDP 也映射上了 */
+    int upnp_udp;                 /* UDP 也映射上了: 外部端口(先试和 TCP 同一个, 占了就顺延; 0 = 没映射) */
+    int uin_ok; char uin_state[200];   /* UDP 入站: 回连验证过(别人发到本机 UDP 映射的包收到了) / 结果说明 */
     char github[100];             /* conf: github 仓库(owner/name), 发布物从它的 Release 取 */
     char relbase[200];            /* conf: release_base <网址>, 发布物从这里取(自建发布源 / 镜像), 取代 GitHub 那一串 */
     char upnp_why[96];
@@ -230,6 +231,8 @@ int  hint_import(const char *line);                       /* "<公钥> <v4|-> [<
 int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
 /* qual.c: 可达自检 */
 void qual_tick(void);
+void qual_uprobe_in(int from, const uint8_t *pl, size_t n);   /* 替别人验 UDP 入站: 往它给的地址发 'Q' + 暗号 */
+void qual_uprobe_got(const uint8_t *pl, size_t n);           /* 本机 UDP 收到 'Q' + 暗号 */
 /* punch.c: 打洞(STUN 经可达节点 /whoami 查映射, 端点写进位置记录, 双方按同一时间窗同时拨) */
 void punch_tick(void);
 int  punch_conn_ready(int i);

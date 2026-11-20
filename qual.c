@@ -79,6 +79,69 @@ static void port6_state(const char *t)
     snprintf(G.port6_state, sizeof G.port6_state, "%s", t);
 }
 
+/* ---------- UDP 入站验证: 和 TCP 回连测试一样, 别人真发进来才算数 ----------
+ * 本机有 UPnP 的 UDP 映射时, 请一个连着的成员(不在同一局域网)往 公网IP:映射端口 发 'Q' + 8 字节暗号; 5 秒内收到 = UDP 入站开着
+ * 通了每 10 分钟复查; 不通就不报这个映射(退回查映射 / 打洞), 并让 UPnP 自修, 1 分钟后再验 */
+static uint8_t unonce[8]; static int uwait; static int64_t udeadline, unext;
+
+void qual_uprobe_got(const uint8_t *pl, size_t n)
+{
+    if (!uwait || n != 8 || memcmp(pl, unonce, 8)) return;
+    uwait = 0;
+    char h[64]; int p; char a[80] = "";
+    if (!hostport(relay_addr(), h, sizeof h, &p)) snprintf(a, sizeof a, "%s:%d", h, G.upnp_udp);
+    if (!G.uin_ok) logf_("UDP 入站: %s 从外面进得来(UPnP 映射, 回连验证过)", a);
+    G.uin_ok = 1; G.mypub_ms = 0;
+    snprintf(G.uin_state, sizeof G.uin_state, "已开启(UPnP 映射): %s 从外面进得来", a);
+    unext = now_ms() + env_s("CUSTHUB_MESH_PROBE_S", 600);
+}
+
+void qual_uprobe_in(int from, const uint8_t *pl, size_t n)
+{
+    char t[120], addr[80], h[64]; int p;                /* "地址 暗号(16 位十六进制)" */
+    if (n == 0 || n >= sizeof t) return;
+    memcpy(t, pl, n); t[n] = 0;
+    char hex[20]; uint8_t m[9];
+    if (sscanf(t, "%79s %19s", addr, hex) != 2 || strlen(hex) != 16 || hostport(addr, h, sizeof h, &p)) return;
+    m[0] = 'Q';
+    for (int k = 0; k < 8; k++) { unsigned v; if (sscanf(hex + 2 * k, "%2x", &v) != 1) return; m[k + 1] = (uint8_t)v; }
+    (void)from;
+    udp_raw(addr, m, sizeof m);
+}
+
+static void uprobe_tick(int64_t now)
+{
+    if (!G.upnp_port || !G.upnp_udp || G.ufd < 0) {   /* 没有 UDP 映射: 没有可验的 */
+        if (G.uin_ok || G.uin_state[0]) { G.uin_ok = 0; G.uin_state[0] = 0; G.mypub_ms = 0; }
+        uwait = 0; return;
+    }
+    if (uwait && now > udeadline) {
+        uwait = 0;
+        if (G.uin_ok) logf_("UDP 入站: UPnP 映射着, 外面发进来的包却收不到");
+        G.uin_ok = 0; G.mypub_ms = 0;
+        snprintf(G.uin_state, sizeof G.uin_state, "不通: UPnP 映射着, 外面发进来的包收不到(已让路由器重新映射)");
+        unext = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
+        upnp_repair();
+    }
+    if (uwait || now < unext) return;
+    char h[64]; int p;
+    if (hostport(relay_addr(), h, sizeof h, &p)) return;    /* 还不知道本机公网 IP */
+    int best = -1;                                      /* 请人验: TCP 链路、对方看本机不是局域网地址的、可达的优先 */
+    for (int i = 0; i < MAXC; i++) {
+        conn_t *c = &G.c[i]; unsigned a = 0, b = 0;
+        if (c->state != C_UP || c->closing || c->guest || c->udp || c->fam == 6 || !c->pm) continue;
+        if (sscanf(c->addr, "%u.%u", &a, &b) == 2 && (a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128))) continue;
+        if (best < 0 || (c->peer_relay && !G.c[best].peer_relay)) best = i;
+    }
+    if (best < 0) { unext = now + 5000; return; }
+    rnd(unonce, 8);
+    char m[160]; int k = snprintf(m, sizeof m, "%s:%d ", h, G.upnp_udp);
+    for (int j = 0; j < 8; j++) k += snprintf(m + k, sizeof m - (size_t)k, "%02x", unonce[j]);
+    conn_send(best, F_UPROBE, 0, m, (size_t)k);
+    uwait = 1; udeadline = now + 5000;
+    if (!G.uin_state[0]) snprintf(G.uin_state, sizeof G.uin_state, "检测中(UPnP 映射 %s:%d)", h, G.upnp_udp);
+}
+
 void qual_tick(void)
 {
     int64_t now = now_ms();
@@ -106,6 +169,7 @@ void qual_tick(void)
     }
     if (G.ok_since && !G.me_relay && now - obs_wrote >= 5000) { obs_wrote = now; obs_save(now - G.ok_since); }
     upnp_tick();                                       /* 路由器自动映射 / 续租(到点才真做) */
+    uprobe_tick(now);
     if (G.probing) return;
     char pl[80]; int port = 0; char host[64];
     if (now >= G.probe_next) {                         /* IPv4: 经 IPv4 链路请人测, 可达节点优先 */

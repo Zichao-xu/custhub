@@ -132,6 +132,7 @@ void udp_io(void)
         if (b[0] == 'W') { char r[80]; int rn = snprintf(r, sizeof r, "w%s", from); udp_raw(from, r, (size_t)rn); continue; }
         if (b[0] == 'w') { b[n] = 0; punch_udp_reply(from, b + 1); continue; }
         if (b[0] == 'P') continue;                       /* 打洞招呼: 收到就说明口子开了, KCP 会自己重传 */
+        if (b[0] == 'Q') { qual_uprobe_got((const uint8_t *)b + 1, (size_t)n - 1); continue; }   /* UDP 入站验证的包 */
         if (b[0] != 'K' || n < 25) continue;
         const uint8_t *p = (const uint8_t *)b + 1;
         uint32_t conv = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
