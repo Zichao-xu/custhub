@@ -95,6 +95,12 @@ void ctl_io(int qi)
         logf_("收到 QUIT, 退出");
         exit(0);
     }
+    if (f >= 2 && !strcmp(cmd, "PING")) {               /* custhub ping <名字> */
+        uint8_t ed[32]; buf_t o = { 0 };
+        if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
+        ping_text(&o, ed); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
+    }
+    if (f >= 1 && !strcmp(cmd, "NETCHECK")) { buf_t o = { 0 }; netcheck_text(&o); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
     if (f >= 1 && !strcmp(cmd, "LINE")) {               /* 新机器的一行接入命令: 地址取网里一台可达、版本最新的机器(rel.c 的只读 HTTP) */
         char l[700]; join_line(l, sizeof l); put_str(fd, l); p_close(fd); return;
     }
@@ -163,6 +169,46 @@ void join_line(char *out, size_t cap)
     }
     char u[200]; snprintf(u, sizeof u, "https://github.com/%s/releases/latest/download", G.github[0] ? G.github : "Zichao-xu/custhub");
     snprintf(out, cap, "-\npowershell -c \"start powershell -verb runas -args 'irm https://ghfast.top/%s/custhub3-join.ps1|iex;pause'\"; curl -fsSL %s/custhub3-join.sh|sh\n", u, u);
+}
+
+static const char *link_kind(const conn_t *c) { return c->udp ? "UDP" : c->fam == 6 ? "TCP IPv6" : "TCP IPv4"; }
+
+void ping_text(buf_t *o, const uint8_t ed[32])
+{
+    int n = 0, best = conn_by_peer(ed);
+    for (int i = 0; i < MAXC; i++) {
+        conn_t *c = &G.c[i];
+        if (c->state != C_UP || memcmp(c->peer, ed, 32)) continue;
+        char r[32]; if (c->rtt) snprintf(r, sizeof r, "%dms", c->rtt); else snprintf(r, sizeof r, "测量中");
+        add(o, "  %s %-9s %-46s 延迟 %s\n", i == best ? "→" : " ", link_kind(c), c->addr, r); n++;
+    }
+    if (best >= 0) { add(o, "走直连: %s %s\n", link_kind(&G.c[best]), G.c[best].addr); return; }
+    int k = route(ed, NULL, 0);
+    if (k >= 0) add(o, "没有直连, 经 %s 中转(到它 %s, 延迟 %dms)\n", name_of(G.c[k].peer), link_kind(&G.c[k]), G.c[k].rtt);
+    else add(o, "不通: 没有直连, 也没有能中转的%s\n", n ? "" : "(对方不在线?)");
+}
+
+void netcheck_text(buf_t *o)
+{
+    char ips[16][48], tp[200], up[200], v6[64]; int ni = p_local_ipv4s(ips, 16);
+    add(o, "本机 %s, 能力: %s\n", G.name, G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] || G.upunch[0] ? "P2P" : "跳转");
+    add(o, "本机地址:"); for (int k = 0; k < ni; k++) add(o, " %s", ips[k]); add(o, "%s\n", ni ? "" : " (没有)");
+    add(o, "IPv4 入站: %s\n", G.port_state[0] ? G.port_state : "检测中");
+    add(o, "UPnP: %s\n", G.upnp_off ? "关(conf upnp off)" : G.upnp_port ? "已映射" : G.upnp_why[0] ? G.upnp_why : "检测中");
+    add(o, "IPv6: %s\n", local_ip6(v6, sizeof v6) ? "本机没有公网 IPv6" : G.port6_state[0] ? G.port6_state : v6);
+    punch_desc(tp, up, sizeof tp);
+    add(o, "TCP 打洞: %s\nUDP 打洞: %s\n", tp, up);
+    add(o, "直连:\n");
+    for (int t = 0; t < G.trust.n; t++) {
+        member_t *m = &G.trust.m[t]; char l[400] = ""; size_t ll = 0;
+        if (!memcmp(m->ed, G.id.ed, 32)) continue;
+        for (int i = 0; i < MAXC; i++) {
+            conn_t *c = &G.c[i];
+            if (c->state != C_UP || memcmp(c->peer, m->ed, 32)) continue;
+            if (c->rtt) ll += (size_t)snprintf(l + ll, sizeof l - ll, " %s %dms", link_kind(c), c->rtt); else ll += (size_t)snprintf(l + ll, sizeof l - ll, " %s", link_kind(c));
+        }
+        if (ll) add(o, "  %-10s%s\n", m->name, l);
+    }
 }
 
 void ls_text(buf_t *o)

@@ -51,12 +51,23 @@ int conn_by_peer_fam(const uint8_t ed[32], int fam)
     return best;
 }
 
-/* 双栈热备: 两种都通时新流量走 IPv6, IPv6 断了马上落到 IPv4(已在跑的流留在原链路上) */
+/* 选路: 到对端的直连里按心跳测的延迟挑, 带偏好: IPv6 > IPv4 > UDP, 明显更快才换。断了一条马上落到别的(已在跑的流留在原链路上) */
 int conn_by_peer(const uint8_t ed[32])
 {
-    int k = conn_by_peer_fam(ed, 6);                     /* TCP 是底座: IPv6 > IPv4 > UDP */
-    if (k < 0) k = conn_by_peer_fam(ed, 4);
-    return k >= 0 ? k : conn_by_peer_fam(ed, 'u');
+    int best = -1, bs = 0, known = 0, mr[MAXC];
+    for (int i = 0; i < MAXC; i++) {                     /* 每条看最近 30 秒的最低延迟; 还没测出的(刚连上)按已知最快的算: 先按偏好用上 */
+        mr[i] = 0;
+        if (G.c[i].state != C_UP || memcmp(G.c[i].peer, ed, 32)) continue;
+        for (int k = 0; k < (G.c[i].rn < 6 ? G.c[i].rn : 6); k++) if (!mr[i] || G.c[i].rs[k] < mr[i]) mr[i] = G.c[i].rs[k];
+        if (mr[i] && (!known || mr[i] < known)) known = mr[i];
+    }
+    for (int i = 0; i < MAXC; i++) {
+        conn_t *c = &G.c[i];
+        if (c->state != C_UP || memcmp(c->peer, ed, 32)) continue;
+        int s = (mr[i] ? mr[i] : known) + (c->udp ? 25 : c->fam == 6 ? 0 : 20);   /* IPv6 优先(慢 20ms 以上才换), TCP 优先于 UDP(UDP 快 5ms 以上才换) */
+        if (best < 0 || s < bs || (s == bs && c->born > G.c[best].born)) { best = i; bs = s; }
+    }
+    return best;
 }
 
 uint32_t conn_new_sid(int i) { uint32_t s = G.c[i].next_sid; G.c[i].next_sid += 2; return s; }
@@ -165,8 +176,17 @@ static void on_frame(int i, const uint8_t *f, size_t n)
     uint32_t sid = (uint32_t)f[1] << 24 | (uint32_t)f[2] << 16 | (uint32_t)f[3] << 8 | f[4];
     const uint8_t *pl = f + 5; size_t pn = n - 5;
     switch (type) {
-    case F_PING:  conn_send(i, F_PONG, 0, NULL, 0); break;
-    case F_PONG:  break;
+    case F_PING:  conn_send(i, F_PONG, 0, pl, pn < 16 ? pn : 0); break;   /* 原样带回时间戳 */
+    case F_PONG:
+        if (pn == 8) {                                   /* 来回延迟: 本机发心跳时的时间戳; 平滑一下 */
+            int64_t t = 0; for (int k = 0; k < 8; k++) t = t << 8 | pl[k];
+            int64_t d = now_ms() - t;
+            if (d >= 0 && d < 60000) {
+                G.c[i].rtt = G.c[i].rtt ? (G.c[i].rtt * 3 + (int)d + 3) / 4 : ((int)d ? (int)d : 1);
+                G.c[i].rs[G.c[i].rn++ % 6] = (int)d ? (int)d : 1;
+            }
+        }
+        break;
     case F_REC:   disc_rec_in(i, (const char *)pl, pn); break;
     case F_TRUST: mtrust_apply((const char *)pl, pn, name_of(G.c[i].peer)); break;
     case F_PENDQ: disc_pendq(i, pl, pn); break;
@@ -378,8 +398,8 @@ static void dial(int t, int six)
         const char *cand[8]; int nc = 0;
         if (tg->addr[0]) cand[nc++] = tg->addr;
         if (tg->alt[0]) cand[nc++] = tg->alt;
-        static char mine[16][48]; static int nmine; static int64_t mine_at;
-        if (!mine_at || now_ms() - mine_at > 30000) { mine_at = now_ms(); nmine = p_local_ipv4s(mine, 16); }
+        static char mine[16][48]; static int nmine; static int64_t mine_at; static int mine_gen;
+        if (!mine_at || now_ms() - mine_at > 30000 || mine_gen != G.net_gen) { mine_at = now_ms(); mine_gen = G.net_gen; nmine = p_local_ipv4s(mine, 16); }
         for (int k = 0; k < tg->nep && nc < 8; k++) {
             char h[64]; int pp, own = 0;
             if (hostport(tg->ep[k], h, sizeof h, &pp)) continue;
@@ -407,6 +427,32 @@ static void dial(int t, int six)
     c->pm = pm; memcpy(c->peer, tg->ed, 32);
     hs_init(&c->hs, 1, G.id.xsec, G.id.x, pm->x);
     if (six) tg->conn6 = i; else tg->conn = i;
+}
+
+/* 本机网络变化(换 Wi-Fi、光猫重启拿到新地址、插拔网线): 每 2 秒看一眼本机地址, 变了就马上重查重连, 不等超时
+ *   各链路立刻发心跳, 3 秒内没回音的(多半绑在已经没了的地址上)关掉; 查映射、UPnP、回连测试、拨号、UDP 热备都从头来 */
+void net_watch(void)
+{
+    static char last[800]; static int64_t at; static int first = 1;
+    int64_t now = now_ms();
+    if (now - at < 2000) return;
+    at = now;
+    char ips[16][48], cur[800] = "", v6[64], tmp[48]; int n = p_local_ipv4s(ips, 16); size_t l = 0;
+    for (int a = 0; a < n; a++) for (int b = a + 1; b < n; b++) if (strcmp(ips[a], ips[b]) > 0) { memcpy(tmp, ips[a], 48); memcpy(ips[a], ips[b], 48); memcpy(ips[b], tmp, 48); }   /* 排序: 系统给的顺序可能变, 不算变化 */
+    for (int k = 0; k < n; k++) l += (size_t)snprintf(cur + l, sizeof cur - l, "%s ", ips[k]);
+    if (!local_ip6(v6, sizeof v6)) l += (size_t)snprintf(cur + l, sizeof cur - l, "%s", v6);
+    const char *sf = getenv("CUSTHUB_NET_SIG_FILE");     /* 测试: 改这个文件的内容 = 模拟网络变化 */
+    char sb[64]; long sn = sf ? m_read(sf, sb, sizeof sb - 1) : -1;
+    if (sn > 0 && l < sizeof cur) { sb[sn] = 0; snprintf(cur + l, sizeof cur - l, " %s", sb); }
+    if (first) { first = 0; snprintf(last, sizeof last, "%s", cur); return; }
+    if (!strcmp(cur, last)) return;
+    logf_("本机网络变了: [%s] → [%s], 马上重查重连", last, cur);
+    snprintf(last, sizeof last, "%s", cur);
+    G.net_gen++; G.net_changed = now;
+    for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP) { G.c[i].ping_at = 0; G.c[i].last_tx = 0; }
+    for (int t = 0; t < G.nt; t++) { G.t[t].next_try = G.t[t].next6 = 0; G.t[t].backoff = G.t[t].back6 = 1000; }
+    G.probe_next = G.probe6_next = 0; G.mypub_ms = 0;
+    punch_reset(); upnp_reset();
 }
 
 /* 打洞的一条: 双方同时拨同一对地址, 合成一条 TCP; 公钥小的一方当 Noise 发起方, 另一方连通后转入等握手(punch_conn_ready) */
@@ -483,18 +529,23 @@ static void tick(void)
         if (c->closing == 3 && now - c->born > 5000) conn_finish(i);    /* 报到链路等不到测试请求: 发完就断 */
         if (c->closing) { if (now - c->born > (c->probe_in ? 3000 : 20000)) conn_close(i, "报到完成"); continue; }
         if (now - c->last_rx > 9000) { conn_close(i, "9 秒没有回音"); continue; }
-        if (now - c->last_tx > 3000) conn_send(i, F_PING, 0, NULL, 0);
+        if (G.net_changed && now - G.net_changed > 3000 && c->last_rx < G.net_changed && now - G.net_changed < 15000) { conn_close(i, "本机网络变了, 这条没回音"); continue; }
+        if (now - c->last_tx > 3000 || now - c->ping_at > 5000) {   /* 心跳带时间戳(测延迟); 有流量时也每 5 秒一次 */
+            uint8_t ts[8]; for (int k = 0; k < 8; k++) ts[k] = (uint8_t)(now >> (56 - 8 * k));
+            conn_send(i, F_PING, 0, ts, 8); c->ping_at = now;
+        }
     }
     for (int t = 0; t < G.nt; t++) {
         target_t *tg = &G.t[t];
-        static int have6; static int64_t h6_at;          /* 本机没有 IPv6 出口就不拨 IPv6(半分钟看一次) */
-        if (!h6_at || now - h6_at > 30000) { char v6[64]; h6_at = now; have6 = !local_ip6(v6, sizeof v6); }
+        static int have6, h6_gen; static int64_t h6_at;  /* 本机没有 IPv6 出口就不拨 IPv6(半分钟看一次, 网络变了马上看) */
+        if (!h6_at || now - h6_at > 30000 || h6_gen != G.net_gen) { char v6[64]; h6_at = now; h6_gen = G.net_gen; have6 = !local_ip6(v6, sizeof v6); }
         if (have6 && tg->addr6[0] && tg->conn6 < 0 && now >= tg->next6 && conn_by_peer_fam(tg->ed, 6) < 0) dial(t, 1);   /* IPv6 那条: 和 IPv4 同时挂(热备) */
         if (tg->conn >= 0 || now < tg->next_try) continue;
         if (conn_by_peer_fam(tg->ed, 4) >= 0) continue; /* 对方已经挂过来了 */
         if (!tg->addr[0] && !tg->alt[0] && !tg->nep) continue;   /* 只有 IPv6 地址 */
         dial(t, 0);
     }
+    net_watch();
     udp_sync();
     disc_tick();
     disc_pend_tick();

@@ -420,13 +420,13 @@ void disc_tick(void)
     lonely_tick(any_up, now);
     b64_encode(G.id.ed, 32, b64);
     /* 地址: IPv4 可达报 IPv4, 只有 IPv6 可达报 IPv6; IPv6 另外跟在机器信息后面(|6=地址, 有 IPv6 出口但连不进来 = -) */
-    static char v6[64]; static int has6; static int64_t v6_at;
-    if (!v6_at || now - v6_at > 30000) { v6_at = now; has6 = G.announce6[0] || !local_ip6(v6, sizeof v6); }   /* 本机有没有 IPv6 出口, 半分钟看一次 */
+    static char v6[64]; static int has6, v6_gen; static int64_t v6_at;
+    if (!v6_at || now - v6_at > 30000 || v6_gen != G.net_gen) { v6_at = now; v6_gen = G.net_gen; has6 = G.announce6[0] || !local_ip6(v6, sizeof v6); }   /* 本机有没有 IPv6 出口, 半分钟看一次 */
     char six[96] = "";
     if (G.r6) snprintf(six, sizeof six, "|6=%s", G.pub6); else if (has6) snprintf(six, sizeof six, "|6=-");
-    static char eps[200]; static int64_t ep_at;         /* 局域网端点: 本机各局域网 IPv4 + 监听端口(监听所有地址时), 半分钟看一次 */
-    if (!ep_at || now - ep_at > 30000) {
-        ep_at = now; eps[0] = 0;
+    static char eps[200]; static int64_t ep_at; static int ep_gen;         /* 局域网端点: 本机各局域网 IPv4 + 监听端口(监听所有地址时), 半分钟看一次 */
+    if (!ep_at || now - ep_at > 30000 || ep_gen != G.net_gen) {
+        ep_at = now; ep_gen = G.net_gen; eps[0] = 0;
         char h[64]; int lp = 0;
         if (G.lfd >= 0 && !G.relay_off && !hostport(G.lspec, h, sizeof h, &lp) && !strcmp(h, "0.0.0.0")) {
             char ips[16][48]; int ni = p_local_ipv4s(ips, 16), ne = 0;

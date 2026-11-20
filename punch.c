@@ -125,8 +125,8 @@ static struct { uint8_t ed[32]; int64_t next, back; int rr; } UB[MAXM]; static i
 
 static void udp_links(int64_t now)
 {
-    static char mine[16][48]; static int nmine; static int64_t mine_at;
-    if (!mine_at || now - mine_at > 30000) { mine_at = now; nmine = p_local_ipv4s(mine, 16); }
+    static char mine[16][48]; static int nmine, mine_gen; static int64_t mine_at;
+    if (!mine_at || now - mine_at > 30000 || mine_gen != G.net_gen) { mine_at = now; mine_gen = G.net_gen; nmine = p_local_ipv4s(mine, 16); }
     char lh[64]; int lp = 0; hostport(G.lspec, lh, sizeof lh, &lp);
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i]; char h[64]; int port;
@@ -153,6 +153,23 @@ static void udp_links(int64_t now)
         udp_dial(r->ed, a);                              /* 握手包本身也在打洞, KCP 会重传; 双方都拨时重复的那条按公钥规则去掉 */
         UB[b].next = now + UB[b].back; UB[b].back = UB[b].back < 300000 ? UB[b].back * 2 : 300000;
     }
+}
+
+void punch_reset(void)
+{
+    q_close(); nask = ngot = 0; next_q = 0;               /* TCP 查映射重来 */
+    udl = 0; nua = nug = 0; next_uq = 0;                 /* UDP 查映射重来 */
+    for (int b = 0; b < nub; b++) { UB[b].next = 0; UB[b].back = 15000; }   /* UDP 热备马上重拨 */
+}
+
+void punch_desc(char *tcp, char *udp, size_t cap)
+{
+    if (G.r4) snprintf(tcp, cap, "不用(本机可达)");
+    else if (G.punch[0]) snprintf(tcp, cap, "%s(映射不随目的地变, 能打洞)", G.punch);
+    else snprintf(tcp, cap, "%s", sym_logged ? "对称型 NAT, 打不了" : "还没查到");
+    if (G.ufd < 0) snprintf(udp, cap, "没开 UDP");
+    else if (G.upunch[0]) snprintf(udp, cap, "%s(映射不随目的地变, 能打洞)", G.upunch);
+    else snprintf(udp, cap, "%s", usym ? "对称型 NAT, 打不了" : "还没查到(可达节点的 UDP 不通?)");
 }
 
 void punch_tick(void)

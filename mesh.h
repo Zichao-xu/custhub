@@ -83,6 +83,8 @@ typedef struct { uint8_t key[32]; int to_all, nto; uint8_t to[PASSTO][32]; char 
 enum { C_FREE, C_CONNECTING, C_HS, C_UP };
 typedef struct {
     int state, fd, initiator, target, peer_relay;
+    int rtt; int64_t ping_at;     /* 来回延迟(毫秒, 心跳测的, 平滑过, 0 = 还不知道) / 上次发心跳 */
+    int rs[6], rn;                /* 最近 6 次(约 30 秒)的延迟: 选路看最低的, 偶尔一次慢不换路 */
     int udp;                      /* UDP 链路: KCP 会话下标 + 1(0 = TCP); fd 为 -1 */
     int punch;                    /* 打洞拨的(TCP 同时打开): 双方都在拨, 公钥小的一方当 Noise 发起方 */
     int fam;                      /* 4 / 6: 这条链路走的是 IPv4 还是 IPv6(同一对端两种各留一条, 热备; 收发优先 v6) */
@@ -154,6 +156,7 @@ typedef struct {
     char upnp_why[96];
     int quiet;                    /* 命令行工具: 没配日志文件时不往 stderr 打日志 */
     hint_t h[MAXM]; int nh;       /* 地址簿(disc.c) */
+    int net_gen; int64_t net_changed;   /* 本机网络变化(地址变了)的次数 / 时刻: 各处地址缓存跟着刷新 */
     int ufd; char upunch[64];     /* UDP 链路(udp.c): socket / 本机 UDP 打洞端点 */
     char punch[64]; int punch_port;   /* 打洞(punch.c): 本机打洞端点 / 本机打洞用的本地端口 */
     char ctl_token[33];           /* 控制口令牌: 每次启动随机生成, 写进 <目录>/ctl.token(只有 root / 管理员 / 本人读得到) */
@@ -304,5 +307,11 @@ int  cmd_connect(const char *dir, const char *target, const char *port);
 int  cmd_ls(const char *dir);
 int  cmd_ctl(const char *dir, const char *line);
 void ls_text(buf_t *o);
+void ping_text(buf_t *o, const uint8_t ed[32]);          /* custhub ping: 到对端的各条链路、延迟、现在走哪条 */
+void netcheck_text(buf_t *o);                            /* custhub netcheck: 本机网络状况 */
+void punch_desc(char *tcp, char *udp, size_t cap);       /* punch.c: TCP / UDP 打洞查映射的结果说明 */
+void net_watch(void);
+void punch_reset(void);                                  /* punch.c: 网络变了, 马上重查映射、重新打洞 */
+void upnp_reset(void);                                   /* upnp.c: 网络变了, 重新找路由器、重新映射 */                                    /* link.c: 本机网络变了(地址变化)就马上重查重连 */
 
 #endif

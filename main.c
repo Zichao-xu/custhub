@@ -33,7 +33,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -86,6 +86,12 @@ int cmd_mesh(int argc, char **argv)
         *nl = 0; fprintf(stderr, "%s\n", strcmp(b, "-") ? b : "(网里没有可达的 0.3.11 以上的机器, 用 GitHub 的; Win7 用不了)");
         fputs(nl + 1, stdout); return 0;
     }
+    if (argc == 4 && !strcmp(c, "ping")) {               /* 到某台的各条链路、延迟、现在走哪条; 每秒一次, 共 4 次 */
+        char l[120]; snprintf(l, sizeof l, "PING %s", argv[3]);
+        for (int k = 0; k < 4; k++) { if (k) { p_sleep_ms(1000); printf("\n"); } if (cmd_ctl(argv[2], l)) return 1; fflush(stdout); }
+        return 0;
+    }
+    if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");   /* 本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟 */
     if (argc == 3 && !strcmp(c, "code")) {               /* 本机接入码 */
         snprintf(p, sizeof p, "%s/node.key", argv[2]);
         char code[8];
@@ -130,6 +136,8 @@ int cmd_mesh(int argc, char **argv)
             "  custhub key approve <接入码> <名字>        批准并起名\n"
             "  custhub key remove <名字>                  移出网络\n"
             "  custhub line                               新机器的一行接入命令(从网里一台可达机器 http 下载, Win7 也能装)\n"
+            "  custhub ping <名字>                        到这台的各条直连(TCP / UDP)、延迟、现在走哪条\n"
+            "  custhub netcheck                           本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"
             "                                             写 --for 时存成 <人>.pass, 发给对方\n\n"

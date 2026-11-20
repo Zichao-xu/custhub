@@ -38,6 +38,7 @@ def pipe(x, y):
         except OSError: pass
 while True:
     c, _ = s.accept(); u = socket.create_connection(("::1", int(sys.argv[2])))
+    for z in (c, u): z.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # 不然小包被攒 40ms, IPv6 测出来比 IPv4 慢, 选路就换成 IPv4
     threading.Thread(target=pipe, args=(c, u), daemon=True).start(); threading.Thread(target=pipe, args=(u, c), daemon=True).start()
 EOF
 fwd(){ python3 "$T/fwd.py" $PX $PR6 >/dev/null 2>&1 & }

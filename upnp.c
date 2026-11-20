@@ -175,6 +175,8 @@ static int map_now(int in, char *why, size_t wcap)
 }
 
 /* 每轮调一次: 到点就映射 / 续租; 结果在 G.upnp_port(0 = 没映射) */
+void upnp_reset(void) { U.next = 0; U.ctl_host[0] = 0; U.ext = 0; }
+
 void upnp_tick(void)
 {
     int64_t now = now_ms();
