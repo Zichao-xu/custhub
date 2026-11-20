@@ -438,7 +438,7 @@ void disc_tick(void)
         }
     }
     char pun[160] = ""; if (G.punch[0] && !G.r4) snprintf(pun, sizeof pun, "|p=%s", G.punch);
-    if (G.upunch[0] && !G.r4) { size_t l = strlen(pun); snprintf(pun + l, sizeof pun - l, "|u=%s", G.upunch); }
+    if (G.upunch[0]) { size_t l = strlen(pun); snprintf(pun + l, sizeof pun - l, "|u=%s", G.upunch); }
     snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s%s", G.me_relay ? "relay" : "node",
              G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, pun, six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {

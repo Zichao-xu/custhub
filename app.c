@@ -174,7 +174,7 @@ void ls_text(buf_t *o)
     if (G.port6_state[0]) add(o, "IPv6: %s\n", G.port6_state);
     add(o, "能力: %s\n", G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] || G.upunch[0] ? "P2P" : "跳转");   /* 本机自己的能力(界面用, 和别人从记录里算的一致) */
     if (!G.r4 && G.punch_port) add(o, "打洞: %s\n", G.punch[0] ? G.punch : "没有可用的打洞端点(还在查, 或对称型 NAT)");
-    if (!G.r4 && G.ufd >= 0) add(o, "UDP 打洞: %s\n", G.upunch[0] ? G.upunch : "没有可用的打洞端点(还在查, 可达节点 UDP 不通, 或对称型 NAT)");
+    if (G.ufd >= 0) add(o, "UDP 打洞: %s\n", G.upunch[0] ? G.upunch : "没有可用的打洞端点(还在查, 可达节点 UDP 不通, 或对称型 NAT)");
     add(o, "挂着:\n");
     for (int t = 0; t < G.nt; t++) {
         int c = conn_by_peer(G.t[t].ed);

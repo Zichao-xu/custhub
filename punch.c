@@ -77,12 +77,12 @@ static void stun_tick(int64_t now)
 }
 
 /* ---------- UDP: 查映射(发 'W' 给两台可达节点的同一个 IP:端口, 回 'w' 地址)、打洞(没有直接的 TCP 链路时) ---------- */
-static char ua[2][64], ug[2][64]; static int nua, nug, usym; static int64_t udl, next_uq;
+static char ua[8][64], ug[8][64]; static int nua, nug, usym; static int64_t udl, next_uq;   /* 一次问所有可达节点(有的 UDP 不通) */
 
 void punch_udp_reply(const char *from, const char *addr)
 {
     char h[64]; int port;
-    if (!udl || hostport(addr, h, sizeof h, &port) || priv(h) || nug >= 2) return;
+    if (!udl || hostport(addr, h, sizeof h, &port) || priv(h) || nug >= 8) return;
     for (int k = 0; k < nua; k++) if (!strcmp(ua[k], from)) { snprintf(ug[nug++], sizeof ug[0], "%s", addr); ua[k][0] = 0; return; }
 }
 
@@ -92,10 +92,11 @@ static void ustun_tick(int64_t now)
     if (udl) {
         if (now < udl && nug < nua) return;
         udl = 0;
-        if (nug && (nug == 1 || !strcmp(ug[0], ug[1]))) {
+        int same = 1; for (int k = 1; k < nug; k++) if (strcmp(ug[k], ug[0])) same = 0;
+        if (nug && same) {
             if (strcmp(G.upunch, ug[0])) { logf_("UDP 打洞端点: %s", ug[0]); G.mypub_ms = 0; }
             snprintf(G.upunch, sizeof G.upunch, "%s", ug[0]); usym = 0;
-        } else if (nug == 2) {
+        } else if (nug >= 2) {
             if (G.upunch[0] || !usym) logf_("UDP 打洞: 两个可达节点看到的映射不一样(%s / %s), 对称型 NAT, 不报", ug[0], ug[1]);
             G.upunch[0] = 0; usym = 1; G.mypub_ms = 0;
         }
@@ -104,9 +105,12 @@ static void ustun_tick(int64_t now)
     }
     if (now < next_uq) return;
     nua = nug = 0;
-    for (int i = 0; i < G.nr && nua < 2; i++) {
-        rec_t *r = &G.r[i];
+    char me[64] = "", mh[64]; int mp;                    /* 本机公网 IP: 同一个 IP 后面的(同一个 NAT)问了也是回环, 看到的不准, 不问 */
+    if (!hostport(G.pub_addr, mh, sizeof mh, &mp) || !hostport(G.upunch, mh, sizeof mh, &mp) || !hostport(G.punch, mh, sizeof mh, &mp)) snprintf(me, sizeof me, "%s", mh);
+    for (int i = 0; i < G.nr && nua < 8; i++) {
+        rec_t *r = &G.r[i]; char rh[64]; int rp;
         if (!r->relay || addr_fam(r->addr) != 4 || !strcmp(r->addr, "-") || !member_by_ed(r->ed)) continue;
+        if (me[0] && strncmp(me, "127.", 4) && !hostport(r->addr, rh, sizeof rh, &rp) && !strcmp(rh, me)) continue;   /* 回环(本机测试)不算 */
         snprintf(ua[nua++], sizeof ua[0], "%s", r->addr);
     }
     if (!nua) { next_uq = now + 5000; return; }
@@ -140,8 +144,8 @@ static void udp_links(int64_t now)
             int own = 0; for (int k = 0; k < nmine; k++) if (!strcmp(mine[k], h) && port == lp) own = 1;
             if (!own) { snprintf(eps[ne], sizeof eps[0], "%s", e); cand[nc++] = eps[ne++]; }
         }
-        if (r->relay && addr_fam(r->addr) == 4 && strcmp(r->addr, "-")) cand[nc++] = r->addr;
-        if (r->upunch[0] && !hostport(r->upunch, h, sizeof h, &port) && !priv(h)) cand[nc++] = r->upunch;
+        if (r->upunch[0] && !hostport(r->upunch, h, sizeof h, &port) && !priv(h)) cand[nc++] = r->upunch;   /* 量出来的 UDP 映射先试 */
+        if (r->relay && addr_fam(r->addr) == 4 && strcmp(r->addr, "-") && strcmp(r->addr, r->upunch)) cand[nc++] = r->addr;
         if (!nc) continue;
         const char *a = cand[UB[b].rr++ % nc];
         uint8_t m[33]; m[0] = 'P'; memcpy(m + 1, G.id.ed, 32);
@@ -158,9 +162,10 @@ void punch_tick(void)
     const char *e = getenv("CUSTHUB_PUNCH_PORT");
     G.punch_port = G.lfd >= 0 && !G.relay_off && !hostport(G.lspec, h, sizeof h, &lp) ? (e ? atoi(e) : lp + 10) : 0;
     if (!member_by_ed(G.id.ed)) return;
-    int punching = G.punch_port && !G.r4;                /* 可达的不用查映射、不用 TCP 打洞(UDP 热备照样挂) */
-    if (!punching) { if (G.punch[0] || G.upunch[0]) { G.punch[0] = G.upunch[0] = 0; G.mypub_ms = 0; } q_close(); }
-    else { stun_tick(now); ustun_tick(now); }
+    int punching = G.punch_port && !G.r4;                /* TCP: 可达的不用查映射、不用打洞 */
+    if (!punching) { if (G.punch[0]) { G.punch[0] = 0; G.mypub_ms = 0; } q_close(); }
+    else stun_tick(now);
+    ustun_tick(now);                                     /* UDP: 每台都查、都报(可达的 UDP 端口未必和 TCP 一样, 比如路由器自己占着) */
     if ((wall_ms() / 1000) % 15 >= 6) return;            /* 双方共用的时间窗 */
     static int64_t last; if (now - last < 1000) return; last = now;
     if (G.ufd >= 0 && !getenv("CUSTHUB_NO_UDP")) udp_links(now);
