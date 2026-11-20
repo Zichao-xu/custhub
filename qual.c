@@ -131,9 +131,11 @@ static void uprobe_tick(int64_t now)
         conn_t *c = &G.c[i]; unsigned a = 0, b = 0;
         if (c->state != C_UP || c->closing || c->guest || c->udp || c->fam == 6 || !c->pm) continue;
         if (sscanf(c->addr, "%u.%u", &a, &b) == 2 && (a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128))) continue;
+        rec_t *r = rec_by_ed(c->peer);                 /* 老版本不认 F_UPROBE(不会发包): 不请它, 免得升级途中误判不通 */
+        if (!r || (ver_cmp(r->ver, "0.3.41") < 0 && strcmp(r->ver, CH_VERSION))) continue;   /* 和本机同版本的(含测试用的开发版)算支持 */
         if (best < 0 || (c->peer_relay && !G.c[best].peer_relay)) best = i;
     }
-    if (best < 0) { unext = now + 5000; return; }
+    if (best < 0) { unext = now + 15000; if (!G.uin_ok) snprintf(G.uin_state, sizeof G.uin_state, "检测中(没有能帮忙验的成员)"); return; }
     rnd(unonce, 8);
     char m[160]; int k = snprintf(m, sizeof m, "%s:%d ", h, G.upnp_udp);
     for (int j = 0; j < 8; j++) k += snprintf(m + k, sizeof m - (size_t)k, "%02x", unonce[j]);
