@@ -1,6 +1,6 @@
 /* 可达自检(design-v3 §0 第 14 条): 可达节点是功能, 节点自检有资质就开、没有就关, 名单不管
  *   资质 = 有别的节点从外面回连本机报出的地址成功(Noise 握手证明连到的就是本机), 并且过了观察期
- *   观察期: 回连一直通、在线一段时间(默认 30 分钟; 上次就可达的免观察, 见地址簿)才在位置记录里声明"我是可达节点"
+ *   观察期: 回连一直通、在线一段时间(默认 5 分钟, 期间每分钟测一次; 上次就可达的免观察, 见地址簿)才在位置记录里声明"我是可达节点"
  *   复查: 默认每 10 分钟请一个连着的成员回连一次; 不通就撤掉声明、停止转发, 1 分钟后再试
  *   请别人测: F_PROBE(内容 = 本机监听端口, 或 conf announce 的整个地址); 对方用它看到的本机 IP 拼地址去拨, 回 F_PROBEA "ok 地址" / "no 原因"
  *   报到中的节点(还没批准)也能请可达节点测, 跑接入命令的人当场看到端口结果; 不算可达的报到节点发 "-", 可达节点就不等了
@@ -89,12 +89,12 @@ void qual_tick(void)
             set_relay(0, "回连测试没回音");
         }
     }
-    if (G.ok6_since && !G.r6 && (seeded6() || now - G.ok6_since >= env_s("CUSTHUB_MESH_OBS_S", 1800)))
+    if (G.ok6_since && !G.r6 && (seeded6() || now - G.ok6_since >= env_s("CUSTHUB_MESH_OBS_S", 300)))
     {
         set_fam(1, 1, seeded6() ? "上次就可达, 免观察" : "过了观察期");
         char m[200]; snprintf(m, sizeof m, "已开启: %s 从外面连得进来, 可达", G.pub6); port6_state(m);
     }
-    if (G.ok_since && !G.me_relay && (seeded() || now - G.ok_since >= env_s("CUSTHUB_MESH_OBS_S", 1800))) {
+    if (G.ok_since && !G.me_relay && (seeded() || now - G.ok_since >= env_s("CUSTHUB_MESH_OBS_S", 300))) {
         set_relay(1, seeded() ? "上次就可达, 免观察" : "过了观察期");
         obs_save(0);
     }
@@ -149,7 +149,7 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
             if (!G.ok6_since) G.ok6_since = now;
             snprintf(G.pub6, sizeof G.pub6, "%s", t + 3);
             if (G.r6) hint_note6(G.id.ed, G.pub6);
-            G.probe6_next = now + env_s("CUSTHUB_MESH_PROBE_S", 600);
+            G.probe6_next = now + (G.r6 ? env_s("CUSTHUB_MESH_PROBE_S", 600) : env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60));   /* 观察期中每分钟测一次 */
             snprintf(m, sizeof m, "已开启: %s 从外面连得进来%s", G.pub6, G.r6 ? ", 可达" : seeded6() ? "" : ", 观察期中");
             port6_state(m);
         } else {
@@ -169,7 +169,7 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
         }
         if (!G.announce[0]) snprintf(G.pub_addr, sizeof G.pub_addr, "%s", t + 3);
         if (G.me_relay) hint_note(G.id.ed, relay_addr());   /* 地址变了跟着记 */
-        G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_S", 600);
+        G.probe_next = now + (G.r4 ? env_s("CUSTHUB_MESH_PROBE_S", 600) : env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60));   /* 观察期中每分钟测一次 */
         port_state(G.upnp_port ? "已开启(UPnP 自动映射): %s 从外面连得进来%s" : "已开启: %s 从外面连得进来%s",
                    relay_addr(), G.me_relay ? ", 可达" : seeded() ? "" : ", 观察期中");
     } else {

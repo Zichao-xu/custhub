@@ -52,7 +52,7 @@ K ls | grep -q "^  x1 .*$code" && ok "ls 里有 x1" || ng "ls: $(K ls)"
 o=$(K approve "$code" x2 2>&1); echo "$o" | grep -q "待批准里没有" && ok "已批准的不会再出现在待批准里" || ng "重复批准: $o"
 K remove x1 >/dev/null 2>&1
 wait_for 15 grep -q "名单 v2 → v3" "$T/x.log"
-! K ls | grep -q "x1" && ok "移除 x1: 名单 v3 里没有了" || ng "移除后 ls: $(K ls)"
+! K ls | grep -q "^  x1 " && ok "移除 x1: 名单 v3 里没有了" || ng "移除后 ls: $(K ls)"
 
 echo "== 2b 自动编号 / 机器名备注 / 改名"
 cy=$($M code "$T/y"); cz=$($M code "$T/z")
