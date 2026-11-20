@@ -163,11 +163,11 @@ static int map_now(int in, char *why, size_t wcap)
 {
     if (!U.ctl_host[0] && discover(why, wcap)) return 0;
     int fault = 0, lease = U.perm ? 0 : 3600;
-    for (int k = 0; k < 6; k++) {
+    for (int k = 0; k < 16; k++) {
         int ext = (U.ext ? U.ext : 8444) + (U.ext ? 0 : k);
         if (!add_map(ext, in, lease, &fault)) return ext;
         if (fault == 725 && lease) { lease = 0; U.perm = 1; k--; continue; }   /* 只认永久映射: 记住, 续租直接用永久 */
-        if (fault != 718 || U.ext) break;                            /* 718: 外部端口被别人占了, 换下一个 */
+        if ((fault != 718 && fault != 729) || U.ext) break;          /* 718 被别的映射占了 / 729 被路由器自己用着(比如路由器上也跑着本程序): 换下一个 */
     }
     U.ctl_host[0] = 0;                                               /* 下次重新找 */
     snprintf(why, wcap, fault ? "路由器拒绝映射(错误 %d)" : "路由器没回应映射请求", fault);
