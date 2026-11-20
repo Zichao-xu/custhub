@@ -48,6 +48,13 @@ int64_t now_ms(void);                       /* 单调时钟毫秒 */
 int64_t wall_ms(void);                      /* 1970 起的毫秒 */
 void rnd(uint8_t *out, size_t n);           /* 取不到就终止程序 */
 int  p_replace(const char *from, const char *to);  /* 原子改名覆盖; 0 成功 */
+/* 文件(路径都是 UTF-8; Windows 上转宽字符, 中文路径也能用) */
+void *p_fopen(const char *path, const char *mode);   /* = fopen, 返回 FILE * */
+int  p_fseek64(void *f, int64_t off);                /* 0 成功 */
+int64_t p_fsize(const char *path);                   /* 文件大小; 没有 / 是目录 -1 */
+int  p_isdir(const char *path);
+int  p_remove(const char *path);
+char p_sep(void);                                    /* 路径分隔符: '/' 或 '\\' */
 
 /* ---------- ssh-agent(持主钥匙的一方签名用; 私钥只在 agent 里, 不进本程序) ---------- */
 /* 把一条完整请求(含 4 字节长度)交给 agent, 读回一条回答(不含长度) → 回答字节数; 失败 -1, why 写原因 */

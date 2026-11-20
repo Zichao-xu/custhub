@@ -33,6 +33,15 @@ Windows 在 Win+R / cmd / PowerShell 里粘贴运行（弹 UAC），Mac / Linux 
 
 它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向网里报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。跑接入的那个账号（用 sudo 时是 sudo 之前的账号）会加进本机的 `custhub` 用户组，重新登录后不用 sudo 就能 `custhub sh / connect / ls / pass`；别的账号用 `sudo custhub user add <账号>` 加（`user del` 移出，`user ls` 列出）。组里的账号经本机守护办事，碰不到节点钥匙；但能用本机的通行证开别的机器的 shell，只加可信的人。`join`、`remove`、`user`、`key` 要 root，不是 root 时自动换成 `sudo`（Windows 上提示用管理员终端）。
 
+### 传文件
+
+```sh
+custhub send 本机文件 A-2 对方路径       # 发过去; 对方路径是已有目录或以 / \ 结尾, 就放进去、用原文件名
+custhub pull 本机路径 A-2 对方文件       # 拉过来; 本机路径是目录就放进去
+```
+
+本机路径永远在前，对方在后。权限和 shell 一样，通行证里有 `file` 或 `sh` 都行。路径支持中文和空格。传完按 BLAKE2b 核对整个文件，对不上就丢弃，不留下半截；没传完的部分存为 `目标.<哈希前 8 位>.custhub-part`，再执行同一条命令就接着传。第一版一次只传一个文件。
+
 ### 工程师登录
 
 1. 工程师电脑照上面接入（自己的 Mac 建议用户模式：`curl … | CUSTHUB_JOIN_ARGS=--user sh`），把接入码给管理员。
@@ -153,6 +162,7 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 | `udp-test.sh` | UDP 链路: 查映射、UDP 打洞、KCP 上跑握手和帧; 丢 20% 的包 1MB 原样到达(lan / punch 测试另查 TCP+UDP 热备) |
 | `net-test.sh` | 心跳测延迟、`custhub ping` / `netcheck`、网络变化马上重查重连 |
 | `decentral-test.sh` | 去中心化: 唯一的可达节点关掉后经不可达节点中转; 新机器向不可达节点报到 |
+| `file-test.sh` | 传文件: send / pull、放进目录、中文和空格路径、断了续传、内容核对、权限 |
 | `v6-test.sh` | 双栈: IPv4、IPv6 分开算可达; 两条链路热备, 优先 IPv6, 断了马上走 IPv4 |
 | `sh-test.sh` | shell：命令、退出码、大输出、交互、窗口大小、Ctrl-C、收尾 |
 | `upnp-test.sh` | UPnP 自动映射（假路由器） |

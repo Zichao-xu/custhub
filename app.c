@@ -137,10 +137,10 @@ void ctl_io(int qi)
         int port = atoi(b);
         char req[16];
         if (!strcmp(b, "sh")) snprintf(req, sizeof req, "sh");
-        else if (!strncmp(b, "bench:", 6)) snprintf(req, sizeof req, "%s", b);
+        else if (!strncmp(b, "bench:", 6) || !strcmp(b, "file")) snprintf(req, sizeof req, "%s", b);
         else snprintf(req, sizeof req, "port:%d", port);
         if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
-        if ((strcmp(b, "sh") && strncmp(b, "bench:", 6) && (port <= 0 || port > 65535)) || hop_open_local(fd, ed, req)) { put_str(fd, "ERR 参数不对或流满了\n"); p_close(fd); }
+        if ((strcmp(b, "sh") && strcmp(b, "file") && strncmp(b, "bench:", 6) && (port <= 0 || port > 65535)) || hop_open_local(fd, ed, req)) { put_str(fd, "ERR 参数不对或流满了\n"); p_close(fd); }
         return;
     }
     put_str(fd, "ERR 不认识的命令\n");

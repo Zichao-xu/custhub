@@ -284,6 +284,13 @@ int  svc_open(const uint8_t rs[32], const char *req, const char *pass, size_t pl
 /* sh.c: sh 服务 */
 int  sh_accept(char *why, size_t wcap);                  /* 新会话 → 交给连通层的本地 fd */
 void sh_poll_add(pfd_t *p, int *np, int *map);           /* map 编号 3000 起 */
+/* file.c: 传文件 */
+int  file_accept(char *why, size_t wcap);
+void file_poll_add(pfd_t *p, int *np, int *map);         /* map 编号 8000 起 */
+void file_io(int k, short rev);
+void file_tick(void);
+int  cmd_send(const char *dir, const char *local, const char *who, const char *rpath);
+int  cmd_pull(const char *dir, const char *local, const char *who, const char *rpath);
 /* bench.c: 测速服务 */
 int  bench_accept(const char *req, char *why, size_t wcap);
 void bench_poll_add(pfd_t *p, int *np, int *map);        /* map 编号 7000 起 */

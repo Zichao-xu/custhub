@@ -33,7 +33,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -92,6 +92,8 @@ int cmd_mesh(int argc, char **argv)
         return 0;
     }
     if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");
+    if (argc == 6 && !strcmp(c, "send")) return cmd_send(argv[2], argv[3], argv[4], argv[5]);   /* custhub send 本机文件 A-2 对方路径 */
+    if (argc == 6 && !strcmp(c, "pull")) return cmd_pull(argv[2], argv[3], argv[4], argv[5]);   /* custhub pull 本机路径 A-2 对方文件 */
     if ((argc == 4 || argc == 5) && !strcmp(c, "bench")) {   /* 测速: 上传、下载各测几秒(默认 5), 走平常的流(同样的加密、额度、选路) */
         int secs = argc == 5 ? atoi(argv[4]) : 5; if (secs < 1 || secs > 60) secs = 5;
         char l[120]; snprintf(l, sizeof l, "PING %s", argv[3]);
@@ -159,6 +161,8 @@ int cmd_mesh(int argc, char **argv)
             "  custhub line                               新机器的一行接入命令(从网里一台可达机器 http 下载, Win7 也能装)\n"
             "  custhub ping <名字>                        到这台的各条直连(TCP / UDP)、延迟、现在走哪条\n"
             "  custhub netcheck                           本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟\n"
+            "  custhub send <本机文件> <名字> <对方路径>     发文件过去(对方路径是目录就放进去); 断了再执行一次会续传\n"
+            "  custhub pull <本机路径> <名字> <对方文件>     把对方的文件拉过来(本机路径是目录就放进去); 同上\n"
             "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"

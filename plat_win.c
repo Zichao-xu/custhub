@@ -180,7 +180,32 @@ void rnd(uint8_t *out, size_t n)
     if (!RtlGenRandom(out, (ULONG)n)) { fprintf(stderr, "取不到随机数\n"); abort(); }
 }
 
-int p_replace(const char *from, const char *to) { return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) ? 0 : -1; }
+static WCHAR *wide(const char *s);
+int p_replace(const char *from, const char *to)      /* UTF-8 路径(中文也行) */
+{
+    WCHAR *a = wide(from), *b = wide(to);
+    int ok = a && b && MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING);
+    free(a); free(b);
+    return ok ? 0 : -1;
+}
+void *p_fopen(const char *path, const char *mode)
+{
+    WCHAR *p = wide(path), *m = wide(mode);
+    FILE *f = p && m ? _wfopen(p, m) : NULL;
+    free(p); free(m);
+    return f;
+}
+int p_fseek64(void *f, int64_t off) { return _fseeki64((FILE *)f, off, SEEK_SET) ? -1 : 0; }
+int64_t p_fsize(const char *path)
+{
+    WCHAR *p = wide(path); WIN32_FILE_ATTRIBUTE_DATA a; int ok = p && GetFileAttributesExW(p, GetFileExInfoStandard, &a);
+    free(p);
+    if (!ok || (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
+    return (int64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow;
+}
+int p_isdir(const char *path) { WCHAR *p = wide(path); DWORD a = p ? GetFileAttributesW(p) : INVALID_FILE_ATTRIBUTES; free(p); return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY); }
+int p_remove(const char *path) { WCHAR *p = wide(path); int r = p ? _wremove(p) : -1; free(p); return r; }
+char p_sep(void) { return '\\'; }
 
 static DWORD WINAPI pump_in(LPVOID arg)          /* 标准输入 → socket; 读完半关 */
 {
