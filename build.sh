@@ -30,7 +30,7 @@ b(){  # b zig目标 平台名 [额外参数…]
   zig cc -target "$t" "${RF[@]}" -DCH_PLAT="\"$n\"" "$@" -o "$f" mesh_main.c "${CORE[@]}" "${plat[@]}" ${libs[@]+"${libs[@]}"}
   rm -f "$f".pdb "${f%.exe}.pdb"
   if [ -n "$ext" ]; then   # 只许依赖 Win10 自带的 DLL(查 PE 导入表; WinHTTP 是运行时按需加载的, 不在表里)
-    local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|user32|ucrtbase|api-ms-win-crt-[a-z0-9-]+)\.dll$' || true)
+    local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|user32|iphlpapi|ucrtbase|api-ms-win-crt-[a-z0-9-]+)\.dll$' || true)
     [ -z "$bad" ] || { echo "$n 依赖了 Win10 不一定自带的 DLL: $bad" >&2; exit 1; }
   fi
   printf '%-14s %8s  %s\n' "$n" "$(wc -c <"$f" | tr -d ' ')" "$(shasum -a 256 "$f" | cut -d' ' -f1)"
@@ -44,7 +44,7 @@ b7(){  # b7 编译器前缀 平台名
   docker run --rm -v "$PWD":/src:ro -v "$(cd "$OUT" && pwd)":/out -w /src custhub-mingw \
     "$cc-gcc" "${CF[@]}" -Os -fno-strict-aliasing -ffunction-sections -DNDEBUG -D__USE_MINGW_ANSI_STDIO=1 -D_WIN32_WINNT=0x0A00 \
     -DCH_VERSION="\"$V\"" -DCH_PLAT="\"$n\"" -Wl,--gc-sections -s -static -o "/out/${f##*/}" mesh_main.c "${CORE[@]}" plat_win.c plat_win7.c -lws2_32 -ladvapi32 -lshell32 -luser32 -liphlpapi
-  local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|user32|msvcrt)\.dll$' || true)
+  local bad; bad=$(objdump -p "$f" | awk '/DLL Name:/{print $3}' | grep -viE '^(kernel32|ws2_32|advapi32|shell32|user32|iphlpapi|msvcrt)\.dll$' || true)
   [ -z "$bad" ] || { echo "$n 依赖了 Win7 不一定自带的 DLL: $bad" >&2; exit 1; }
   printf '%-14s %8s  %s\n' "$n" "$(wc -c <"$f" | tr -d ' ')" "$(shasum -a 256 "$f" | cut -d' ' -f1)"
 }
