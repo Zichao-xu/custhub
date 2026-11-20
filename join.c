@@ -176,6 +176,21 @@ int cmd_join3(int argc, char **argv)
     long on = m_read(p, old, sizeof old);
     if (on <= 0 || mtrust_parse(old, (size_t)on, &ot, G.master) || ot.ver < t.ver) m_write(p, trust, strlen(trust));
     else t = ot;                                        /* 手上的更新(比如已经批准过): 按它判断 */
+    /* 地址簿: 种子里附的可达地址, 本机还没记过的补上(重复接入时手上的更新, 不覆盖) */
+    sep_join(p, sizeof p, node, "peers");
+    {
+        static char pb[MAXM * 120 * 2]; long pn = m_read(p, pb, sizeof pb / 2); size_t pl = pn > 0 ? (size_t)pn : 0; int add = 0;
+        if (pl && pb[pl - 1] != '\n') pb[pl++] = '\n';
+        pb[pl] = 0;
+        for (const char *h = strstr(seed, "\nhint "); h; h = strstr(h + 1, "\nhint ")) {
+            char kb[64], ad[64], kk[70];
+            if (sscanf(h + 6, "%63s %63s", kb, ad) != 2) continue;
+            snprintf(kk, sizeof kk, "%s ", kb);
+            if (strstr(pb, kk) || pl + 140 > sizeof pb) continue;
+            pl += (size_t)snprintf(pb + pl, sizeof pb - pl, "%s %s\n", kb, ad); add++;
+        }
+        if (add) { m_write(p, pb, pl); printf("  可达地址 %d 个(来自种子)\n", add); }
+    }
     /* conf: 重写, 只保留本机手动加过的几项 */
     sep_join(p, sizeof p, node, "conf");
     static char oc[8192], nc[8192]; char host[100], logp[1300];

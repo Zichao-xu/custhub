@@ -54,7 +54,7 @@ echo "== 1 种子线索 + 自检"
 wait_for 10 up adm r; wait_for 10 up b r
 wait_for 10 grep -q "可达: 对外地址" "$T/r.log"
 ok "r 按名单里的端口开了监听(conf 里没写)" 'grep -q "监听 0.0.0.0:$PR" "$T/r.log"'
-ok "r 回连测试通过就算可达(种子线索免观察期)" 'grep -q "可达: 对外地址 127.0.0.1:$PR(种子线索, 免观察)" "$T/r.log"'
+ok "r 回连测试通过就算可达(名单里的老种子免观察期)" 'grep -q "可达: 对外地址 127.0.0.1:$PR(上次就可达, 免观察)" "$T/r.log"'
 ok "relay off 的 adm 不开监听" '! grep -q "监听" "$T/adm.log"'
 wait_for 10 sh -c "$M ls $T/d | grep -q 端口:.不通"
 ok "d 报的地址连不进来: 端口显示不通, 不算可达" '$M ls "$T/d" | grep -q "端口: 不通" && ! grep -q "可达: 对外地址" "$T/d.log"'
@@ -104,6 +104,17 @@ ok "adm、c 从 b 的位置记录得知它是可达节点, 自动挂上" 'up adm
 kill -9 $(pgrep -f "$M run $T/r") 2>/dev/null; sleep 1
 ok "关掉种子 r 后 c 经 b 仍能连 b 的服务" '[ "$(printf hi-b | $M connect "$T/c" b $ECHO)" = hi-b ]'
 ok "relay off 的 adm 始终没算可达" '! grep -q "可达: 对外地址" "$T/adm.log"'
+
+echo "== 6 地址簿: 可达由表现决定, 名单不用写地址; 全部重启后靠地址簿找回彼此"
+B64B=$(cat "$T/b.pub")
+ok "b、adm 的地址簿都记下了 b 的地址" 'grep -q "^$B64B 127.0.0.1:$PB$" "$T/b/peers" && grep -q "^$B64B 127.0.0.1:$PB$" "$T/adm/peers"'
+ok "回连不通的 d 没进地址簿" '! grep -q "$(cat "$T/d.pub")" "$T/adm/peers"'
+kill -9 $(pgrep -f "$M run $T/b") $(pgrep -f "$M run $T/adm") 2>/dev/null; sleep 1
+$M run "$T/b" & $M run "$T/adm" &
+wait_for 15 grep -q "可达: 对外地址 127.0.0.1:$PB(上次就可达, 免观察)" "$T/b.log"
+ok "b 重启: 上次就可达, 回连一通马上算可达(不再等观察期)" 'grep -q "可达: 对外地址 127.0.0.1:$PB(上次就可达, 免观察)" "$T/b.log"'
+wait_for 15 up adm b
+ok "adm 重启(名单里只有已关的 r 带地址): 靠地址簿连回 b" 'up adm b'
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail -eq 0 ] || { KEEP=1; tail -n 12 "$T"/*.log; }

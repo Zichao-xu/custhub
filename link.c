@@ -422,8 +422,15 @@ void relay_sync(void)
     member_t *me = member_by_ed(G.id.ed);
     if (G.relay_off) ;
     else if (G.listen[0]) snprintf(want, sizeof want, "%s", G.listen);
-    else if (me && me->relay && !hostport(me->addr, host, sizeof host, &port)) snprintf(want, sizeof want, "0.0.0.0:%d", port);   /* 种子线索: 按名单里的端口 */
-    else snprintf(want, sizeof want, "0.0.0.0:8444");
+    else {                                             /* 名单里带地址的老写法按它的端口, 并记进 <目录>/lport: 名单去掉地址后照旧 */
+        char lp[300], pt[16] = ""; snprintf(lp, sizeof lp, "%s/lport", G.dir);
+        if (me && me->relay && !hostport(me->addr, host, sizeof host, &port)) {
+            snprintf(pt, sizeof pt, "%d\n", port);
+            char old[16] = ""; long on = m_read(lp, old, sizeof old - 1); if (on > 0) old[on] = 0;
+            if (port != 8444 && strcmp(old, pt)) m_write(lp, pt, strlen(pt));
+        } else { long on = m_read(lp, pt, sizeof pt - 1); port = on > 0 ? (pt[on] = 0, atoi(pt)) : 0; }
+        snprintf(want, sizeof want, "0.0.0.0:%d", port > 0 && port < 65536 ? port : 8444);
+    }
     if (G.lfd >= 0 && strcmp(want, G.lspec)) {
         p_close(G.lfd); G.lfd = -1;
         logf_("停止监听 %s", G.lspec); G.lspec[0] = 0;

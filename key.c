@@ -193,6 +193,11 @@ static int trust_edit(const char *dir, const char *drop_name, const char *add_li
         nx = strchr(l, '\n'); if (nx) *nx++ = 0;
         char kind[16], nm[40];
         if (drop_name && sscanf(l, "%15s %39s", kind, nm) == 2 && !strcmp(nm, drop_name)) continue;
+        char kb[64]; const char *h = strstr(l, " host=");   /* 名单只管谁是成员: 老写法带的地址(种子)顺手去掉, 可达由各机器自检 */
+        if (sscanf(l, "%15s %39s %63s", kind, nm, kb) == 3 && (!strcmp(kind, "relay") || !strcmp(kind, "node"))) {
+            bl += (size_t)snprintf(body + bl, sizeof body - bl, "node %s %s%s\n", nm, kb, h ? h : "");
+            continue;
+        }
         bl += (size_t)snprintf(body + bl, sizeof body - bl, "%s\n", l);
     }
     if (add_line) bl += (size_t)snprintf(body + bl, sizeof body - bl, "%s\n", add_line);
@@ -423,8 +428,8 @@ loaded:
         for (int i = 1; i + 1 < k; i++) { if (!strcmp(av[i], "--github")) repo = av[++i]; else if (!strcmp(av[i], "--out")) out = av[++i]; }
         if (!repo) { fprintf(stderr, "要 --github 仓库(本机 conf 里也没有)\n"); return 2; }
         char ml[200]; master_line(ml, sizeof ml);
-        static char s[MAXTEXT + 512];
-        int n = snprintf(s, sizeof s, "custhub-seed v1\nmaster %s\ngithub %s\n--trust--\n", ml, repo);
+        static char s[MAXTEXT + 512 + MAXM * 120], hs[MAXM * 120]; hints_text(hs, sizeof hs);   /* 附本机地址簿里的可达地址 */
+        int n = snprintf(s, sizeof s, "custhub-seed v1\nmaster %s\ngithub %s\n%s--trust--\n", ml, repo, hs);
         memcpy(s + n, G.trust.text, G.trust.tlen);
         size_t tl = (size_t)n + G.trust.tlen;
         if (out) { if (m_write(out, s, tl)) { fprintf(stderr, "写不了 %s\n", out); return 1; } fprintf(stderr, "种子 → %s(名单 v%ld)\n", out, G.trust.ver); }
@@ -459,13 +464,12 @@ loaded:
         if (!r) { number_used(dir, nm); printf("已批准 %s(接入码 %s%s%s), 新名单正沿链路传开\n", nm, want, hhost[0] ? ", 机器名 " : "", hhost); }
         return r;
     }
-    if (!strcmp(c, "rename")) {                          /* 改名: 公钥、地址、机器名备注都不变 */
+    if (!strcmp(c, "rename")) {                          /* 改名: 公钥、机器名备注都不变 */
         if (k != 3 || !member_by_name(av[1]) || !name_ok(av[2])) { fprintf(stderr, "用法: custhub key rename <名单里的名字> <新名字(字母数字 _ -, 最多 31)>\n"); return 2; }
         if (member_by_name(av[2])) { fprintf(stderr, "名字 %s 已经有人用了\n", av[2]); return 1; }
         member_t *m = member_by_name(av[1]);
         char kb[48], line[240]; b64_encode(m->ed, 32, kb);
         int ll = snprintf(line, sizeof line, "%s %s %s", "node", av[2], kb);
-        if (m->relay && m->addr[0]) ll += snprintf(line + ll, sizeof line - (size_t)ll, " %s", m->addr);
         if (m->host[0]) snprintf(line + ll, sizeof line - (size_t)ll, " host=%s", m->host);
         int r = trust_edit(dir, av[1], line);
         if (!r) { number_used(dir, av[2]); printf("%s 改名为 %s\n", av[1], av[2]); }

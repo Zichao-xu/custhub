@@ -61,6 +61,7 @@ void ed_to_x(const uint8_t ed[32], uint8_t x[32]);
 /* ---------- 名单 / 位置记录 (disc.c) ---------- */
 typedef struct { char name[32]; uint8_t ed[32], x[32]; int relay; char addr[64], host[64]; } member_t;   /* host: 批准时记下的机器名(名单行末 host=…, 只作备注) */
 typedef struct { long ver; int n; member_t m[MAXM]; char text[MAXTEXT]; size_t tlen; } trust_t;
+typedef struct { uint8_t ed[32]; char addr[64]; } hint_t;   /* 地址簿: 见过的可达地址(本机也在内), 存 <目录>/peers, 重启后拿它找人 */
 typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
     int relay; char addr[64], relays[160], status[320], ver[16], info[200];   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
@@ -138,6 +139,7 @@ typedef struct {
     char relbase[200];            /* conf: release_base <网址>, 发布物从这里取(自建发布源 / 镜像), 取代 GitHub 那一串 */
     char upnp_why[96];
     int quiet;                    /* 命令行工具: 没配日志文件时不往 stderr 打日志 */
+    hint_t h[MAXM]; int nh;       /* 地址簿(disc.c) */
     char ctl_token[33];           /* 控制口令牌: 每次启动随机生成, 写进 <目录>/ctl.token(只有 root / 管理员 / 本人读得到) */
 } g_t;
 extern g_t G;
@@ -194,10 +196,14 @@ void targets_sync(void);
 void disc_pendq(int from, const uint8_t *pl, size_t n);   /* 可达节点: 主钥匙签名的查询 → 回待批准名单 */
 void disc_penda(int from, const uint8_t *pl, size_t n);   /* 查询方: 收各可达节点的回答 */
 void disc_pend_tick(void);
+void hints_load(void);                                   /* 读 <目录>/peers; 没有就从名单里的老地址起头 */
+void hint_note(const uint8_t ed[32], const char *addr);  /* 记下 / 更新一个可达地址(addr NULL = 删掉) */
+const char *hint_addr(const uint8_t ed[32]);
+size_t hints_text(char *o, size_t cap);                  /* 种子里的 "hint <公钥> <地址>" 行(只含名单成员) */
 int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
 /* qual.c: 可达自检 */
 void qual_tick(void);
-int  me_seed(void);                                      /* 本机是名单里带地址的种子线索 */
+int  me_seed(void);                                      /* 上次就是可达的(地址簿里有本机) / 名单里带地址的老种子: 免观察、先收报到 */
 void upnp_tick(void);                                    /* upnp.c */
 /* rel.c: 发布物 + 自升级 */
 long ver_cmp(const char *a, const char *b);

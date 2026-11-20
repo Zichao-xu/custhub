@@ -134,6 +134,7 @@ static void load_ls(void)
             if (c) sscanf(c + 7, "%127s", st);
             if (d) sscanf(d + 7, "%15[^(](%lds", vr, &age);
             r->rec = 1; r->age = age;
+            r->relay = strstr(ln, " 可达 ") != NULL;         /* 可达看它自己的声明(自检), 不看名单 */
             if (strcmp(ad, "-")) snprintf(r->addr, sizeof r->addr, "%s", ad);
             snprintf(r->via, sizeof r->via, "%s", via); snprintf(r->status, sizeof r->status, "%s", st); snprintf(r->ver, sizeof r->ver, "%s", vr);
         }
