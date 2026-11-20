@@ -15,6 +15,7 @@ typedef struct { char code[8], key[48], from[80], host[64], plat[24], ver[16]; }
 static row_t RW[MAXM]; static int nrw;
 static void set_info(row_t *r, const char *mi);
 static pend_t PD[32]; static int npd;
+static char my6[200] = "";                            /* 本机 IPv6 那一行(ls 的 "IPv6: …") */
 static char tdir[1200], tself[1200], me[64] = "?", info[200] = "", msg[600] = "", mykey[48] = "";
 static int unlocked, sel, top, rows = 24, cols = 80, msg_err;
 static int64_t t_ls, t_status, t_pend;
@@ -96,7 +97,7 @@ static void load_ls(void)
     if (ctl_get("TRUST", t, sizeof t) < 0) { set_msg(1, "连不上本机守护(custhub 服务没在跑?)"); return; }
     if (ctl_get("LS", l, sizeof l) < 0) return;
     int was = sel; char wasn[32] = ""; if (was < nrw) snprintf(wasn, sizeof wasn, "%s", RW[was].name);
-    nrw = 0;
+    nrw = 0; my6[0] = 0;
     char *sv = NULL;
     for (char *ln = m_tok(t, "\n", &sv); ln && nrw < MAXM; ln = m_tok(NULL, "\n", &sv)) {
         char k[8], nm[32], kb[48], ad[64] = "";
@@ -110,6 +111,7 @@ static void load_ls(void)
     }
     sv = NULL; int sec = 0;
     for (char *ln = m_tok(l, "\n", &sv); ln; ln = m_tok(NULL, "\n", &sv)) {
+        if (!strncmp(ln, "IPv6: ", 6)) { snprintf(my6, sizeof my6, "%s", ln + 6); continue; }
         if (!strncmp(ln, "本机 ", 7)) {
             sscanf(ln + 7, "%63[^(]", me);
             snprintf(info, sizeof info, "%s", ln);
@@ -228,7 +230,7 @@ static void draw(void)
         char line[400], conn[200];
         if (i < nrw) {
             row_t *r = &RW[i]; int on = online(r);
-            if (r->self) snprintf(conn, sizeof conn, "本机");
+            if (r->self) snprintf(conn, sizeof conn, "本机%s", !my6[0] || strstr(my6, "没有 IPv6") ? "" : strstr(my6, ", 可达") ? "(IPv6 可达)" : strstr(my6, "已开启") ? "(IPv6 观察中)" : "(有 IPv6, 外面连不进来)");
             else if (r->link) snprintf(conn, sizeof conn, "直连%s%s%s", r->link4 && r->link6 ? "(IPv4+IPv6)" : r->link6 ? "(IPv6)" : "", r->relay ? " " : "", r->relay ? r->addr : "");
             else if (r->rec && strcmp(r->via, "-")) snprintf(conn, sizeof conn, "经 %s", r->via);
             else snprintf(conn, sizeof conn, "%s", r->relay ? r->addr : "-");
@@ -255,6 +257,7 @@ static void draw(void)
         snprintf(det, sizeof det, " %s  接入码 %s  %s%s%s%s  %s  公钥 %.12s…%s", r->name, r->code, r->relay ? "可达 " : "节点", r->relay && addr_fam(r->addr) == 4 ? r->addr : "",
                  r->addr6[0] ? (r->relay && addr_fam(r->addr) == 4 ? "  IPv6 " : "IPv6 ") : "", r->addr6, r->plat[0] ? r->plat : "", r->key, r->rec && !r->self ? "  " : "");
         if (r->rec && !r->self) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "最近 %lds 前", r->age); }
+        if (r->self && my6[0]) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "  IPv6: %s", my6); }
     } else if (sel >= nrw && sel - nrw < npd) {
         pend_t *p = &PD[sel - nrw]; snprintf(det, sizeof det, " 待批准 %s  机器名 %s  公钥 %.12s…", p->code, p->host, p->key);
     }
