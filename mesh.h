@@ -151,6 +151,7 @@ typedef struct {
     char port_state[320];         /* 端口检测结果(给 ls / join 看) */
     char port6_state[320];        /* IPv6 那一份 */
     int upnp_off, upnp_port;      /* conf: upnp off; 路由器上映射出去的外部端口(0 = 没映射) */
+    int upnp_udp;                 /* 同一个外部端口的 UDP 也映射上了 */
     char github[100];             /* conf: github 仓库(owner/name), 发布物从它的 Release 取 */
     char relbase[200];            /* conf: release_base <网址>, 发布物从这里取(自建发布源 / 镜像), 取代 GitHub 那一串 */
     char upnp_why[96];

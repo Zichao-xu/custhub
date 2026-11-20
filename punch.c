@@ -99,15 +99,24 @@ void punch_udp_reply(const char *from, const char *addr)
 static void ustun_tick(int64_t now)
 {
     if (G.ufd < 0) { G.upunch[0] = 0; return; }
+    char ph[64]; int pp;                                 /* UPnP 的 UDP 也映射上了: 直接报它(固定、不用打洞就进得来), 不用查 */
+    if (G.upnp_port && G.upnp_udp && !hostport(relay_addr(), ph, sizeof ph, &pp)) {
+        char a[80]; snprintf(a, sizeof a, "%s:%d", ph, G.upnp_port);
+        if (strcmp(G.upunch, a)) { logf_("UDP 打洞端点: %s(UPnP 映射)", a); snprintf(G.upunch, sizeof G.upunch, "%s", a); G.mypub_ms = 0; }
+        usym = 0; udl = 0; return;
+    }
     if (udl) {
         if (now < udl && nug < nua) return;
         udl = 0;
-        int same = 1; for (int k = 1; k < nug; k++) if (strcmp(ug[k], ug[0])) same = 0;
-        if (nug && same) {
-            if (strcmp(G.upunch, ug[0])) { logf_("UDP 打洞端点: %s", ug[0]); G.mypub_ms = 0; }
-            snprintf(G.upunch, sizeof G.upunch, "%s", ug[0]); usym = 0;
+        /* 取多数: 同一个本地端口在路由器上可能对着两个公网端口(UPnP 的固定映射 + 主动发出去时分的), 先连过来的成员看到前者;
+         * 有两个以上一致就用它, 只有一个回答也用; 全都互不相同才算对称型 NAT */
+        int top = -1, tc = 0;
+        for (int k = 0; k < nug; k++) { int c = 0; for (int j = 0; j < nug; j++) if (!strcmp(ug[j], ug[k])) c++; if (c > tc) { tc = c; top = k; } }
+        if (nug && (tc >= 2 || nug == 1)) {
+            if (strcmp(G.upunch, ug[top])) { logf_("UDP 打洞端点: %s", ug[top]); G.mypub_ms = 0; }
+            snprintf(G.upunch, sizeof G.upunch, "%s", ug[top]); usym = 0;
         } else if (nug >= 2) {
-            if (G.upunch[0] || !usym) logf_("UDP 打洞: 两个可达节点看到的映射不一样(%s / %s), 对称型 NAT, 不报", ug[0], ug[1]);
+            if (G.upunch[0] || !usym) logf_("UDP 打洞: %d 个成员看到的映射各不相同(%s / %s …), 对称型 NAT, 不报", nug, ug[0], ug[1]);
             G.upunch[0] = 0; usym = 1; G.mypub_ms = 0;
         }
         next_uq = now + (nug ? 300000 : 30000);
