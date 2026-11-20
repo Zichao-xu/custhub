@@ -440,7 +440,9 @@ static void tick(void)
     }
     for (int t = 0; t < G.nt; t++) {
         target_t *tg = &G.t[t];
-        if (tg->addr6[0] && tg->conn6 < 0 && now >= tg->next6 && conn_by_peer_fam(tg->ed, 6) < 0) dial(t, 1);   /* IPv6 那条: 和 IPv4 同时挂(热备) */
+        static int have6; static int64_t h6_at;          /* 本机没有 IPv6 出口就不拨 IPv6(半分钟看一次) */
+        if (!h6_at || now - h6_at > 30000) { char v6[64]; h6_at = now; have6 = !local_ip6(v6, sizeof v6); }
+        if (have6 && tg->addr6[0] && tg->conn6 < 0 && now >= tg->next6 && conn_by_peer_fam(tg->ed, 6) < 0) dial(t, 1);   /* IPv6 那条: 和 IPv4 同时挂(热备) */
         if (tg->conn >= 0 || now < tg->next_try) continue;
         if (conn_by_peer_fam(tg->ed, 4) >= 0) continue; /* 对方已经挂过来了 */
         if (!tg->addr[0] && !tg->alt[0] && !tg->nep) continue;   /* 只有 IPv6 地址 */

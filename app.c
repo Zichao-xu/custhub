@@ -179,7 +179,8 @@ void ls_text(buf_t *o)
         (void)c;
         const char *a4 = c4 >= 0 ? G.c[c4].addr : G.t[t].addr[0] ? G.t[t].addr : G.t[t].nep ? G.t[t].ep[0] : "";   /* 通了显示实际连上的那个地址 */
         if (a4[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, a4, c4 >= 0 ? "通" : G.t[t].why);
-        if (G.t[t].addr6[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr6, c6 >= 0 ? "通" : G.t[t].why6);
+        char v6[64];
+        if (G.t[t].addr6[0] && !local_ip6(v6, sizeof v6)) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr6, c6 >= 0 ? "通" : G.t[t].why6);
     }
     add(o, "链路:\n");
     for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP)
