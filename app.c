@@ -66,8 +66,8 @@ void ctl_io(int qi)
     }
     *nl = 0;
     int fd = q->fd; q->fd = 0;
-    char cmd[16], a[64], b[16];
-    int f = sscanf(q->line, "%15s %63s %15s", cmd, a, b);
+    char cmd[16], a[64], b[160];
+    int f = sscanf(q->line, "%15s %63s %159s", cmd, a, b);
     if (f >= 1 && !strcmp(cmd, "TRUST")) { put_all(fd, G.trust.text, G.trust.tlen); p_close(fd); return; }
     if (f >= 2 && (!strcmp(cmd, "TRUSTPUT") || !strcmp(cmd, "PENDQ"))) {
         static uint8_t d[MAXTEXT];
@@ -104,13 +104,28 @@ void ctl_io(int qi)
     if (f >= 2 && !strcmp(cmd, "PING")) {               /* custhub ping <名字> */
         uint8_t ed[32]; buf_t o = { 0 };
         if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
-        ping_text(&o, ed); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
+        if (f >= 3 && !strcmp(b, "json")) ping_json(&o, ed); else ping_text(&o, ed);
+        put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
     }
     if (f >= 2 && !strcmp(cmd, "TARGETS")) {             /* 目标表达式 → 名字列表(custhub exec 用) */
         char out[2048]; put_str(fd, targets_resolve(q->line + 8, out, sizeof out) ? out : out); put_str(fd, "\n"); p_close(fd); return;
     }
+    if (f >= 1 && !strcmp(cmd, "EVENTS")) {              /* EVENTS <从哪个编号之后(-1 = 只要编号)> [json] */
+        buf_t o = { 0 }; long since = f >= 2 ? atol(a) : 0;
+        if (since < 0) { char l[40]; snprintf(l, sizeof l, "%ld\n", events_last()); put_str(fd, l); p_close(fd); return; }
+        events_text(&o, since, f >= 3 && !strcmp(b, "json")); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
+    }
+    if (f >= 3 && !strcmp(cmd, "CHECK")) {               /* CHECK <名字> <条件> [值] */
+        char c3[64] = "", v[64] = "", out[200]; sscanf(q->line, "%*s %*s %63s %63s", c3, v);
+        events_check(a, c3, v, out, sizeof out); put_str(fd, out); put_str(fd, "\n"); p_close(fd); return;
+    }
+    if (f >= 1 && !strcmp(cmd, "LOG")) {                 /* custhub log(本机): LOG <行数> [关键字(空格写成 %20)] */
+        buf_t o = { 0 }; char key[160] = ""; size_t kl = 0;
+        for (const char *c = f >= 3 ? b : ""; *c && kl < sizeof key - 1; c++) { if (c[0] == '%' && c[1] == '2' && (c[2] == '0' || c[2] == '5')) { key[kl++] = c[2] == '0' ? ' ' : '%'; c += 2; } else key[kl++] = *c; }
+        key[kl] = 0; log_tail(&o, f >= 2 ? atoi(a) : 100, key); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
+    }
     if (f >= 1 && !strcmp(cmd, "INV")) { buf_t o = { 0 }; inventory_text(&o, f >= 2 && !strcmp(a, "json")); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
-    if (f >= 1 && !strcmp(cmd, "NETCHECK")) { buf_t o = { 0 }; netcheck_text(&o); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
+    if (f >= 1 && !strcmp(cmd, "NETCHECK")) { buf_t o = { 0 }; if (f >= 2 && !strcmp(a, "json")) netcheck_json(&o); else netcheck_text(&o); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
     if (f >= 1 && !strcmp(cmd, "LINE")) {               /* 新机器的一行接入命令: 地址取网里一台可达、版本最新的机器(rel.c 的只读 HTTP) */
         char l[700]; join_line(l, sizeof l); put_str(fd, l); p_close(fd); return;
     }
@@ -139,12 +154,18 @@ void ctl_io(int qi)
     uint8_t ed[32];
     if (f == 3 && !strcmp(cmd, "CONNECT")) {
         int port = atoi(b);
-        char req[16];
+        char req[160];
         if (!strcmp(b, "sh")) snprintf(req, sizeof req, "sh");
-        else if (!strncmp(b, "bench:", 6) || !strcmp(b, "file")) snprintf(req, sizeof req, "%s", b);
+        else if (!strncmp(b, "bench:", 6) || !strcmp(b, "file") || !strncmp(b, "info:", 5)) snprintf(req, sizeof req, "%s", b);
         else snprintf(req, sizeof req, "port:%d", port);
         if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
-        if ((strcmp(b, "sh") && strcmp(b, "file") && strncmp(b, "bench:", 6) && (port <= 0 || port > 65535)) || hop_open_local(fd, ed, req)) { put_str(fd, "ERR 参数不对或流满了\n"); p_close(fd); }
+        const char *need = !strncmp(b, "bench:", 6) ? "bench" : !strcmp(b, "file") ? "file" : !strncmp(b, "info:", 5) ? "info" : NULL;
+        if (need && !has_feat(ed, need)) {               /* 对方没报这个功能: 当场说清楚, 不去试 */
+            rec_t *r = rec_by_ed(ed); char m[200];
+            snprintf(m, sizeof m, "ERR 对方(版本 %s)还不支持 %s, 等它自动升级后再试\n", r && r->ver[0] ? r->ver : "未知", need);
+            put_str(fd, m); p_close(fd); return;
+        }
+        if ((strcmp(b, "sh") && strcmp(b, "file") && strncmp(b, "bench:", 6) && strncmp(b, "info:", 5) && (port <= 0 || port > 65535)) || hop_open_local(fd, ed, req)) { put_str(fd, "ERR 参数不对或流满了\n"); p_close(fd); }
         return;
     }
     put_str(fd, "ERR 不认识的命令\n");
@@ -277,6 +298,7 @@ void inventory_text(buf_t *o, int json)
             add(o, ",\"os\":"); json_str(o, f[2]); add(o, ",\"model\":"); json_str(o, f[3]);
             add(o, ",\"capability\":\"%s\",\"addr\":", cap_of(v4, v6, punch, 1)); json_str(o, addr);
             add(o, ",\"addr6\":"); json_str(o, self ? (G.r6 ? G.pub6 : "") : r && r->addr6[0] == '[' ? r->addr6 : "");
+            add(o, ",\"features\":"); json_str(o, self ? FEATURES : r ? r->feats : "");
             add(o, ",\"last_seen_s\":%ld,\"link\":", self ? 0L : age);
             if (c >= 0) { add(o, "{\"kind\":\"%s\",\"addr\":", G.c[c].udp ? "udp" : G.c[c].fam == 6 ? "tcp6" : "tcp4"); json_str(o, G.c[c].addr); add(o, ",\"rtt_ms\":%d}", G.c[c].rtt); }
             else if (link[0]) { add(o, "{\"kind\":\"relay\",\"via\":"); json_str(o, link + 4); add(o, "}"); }
@@ -305,6 +327,53 @@ void ping_text(buf_t *o, const uint8_t ed[32])
     int k = route(ed, NULL, 0);
     if (k >= 0) add(o, "没有直连, 经 %s 中转(到它 %s, 延迟 %dms)\n", name_of(G.c[k].peer), link_kind(&G.c[k]), G.c[k].rtt);
     else add(o, "不通: 没有直连, 也没有能中转的%s\n", n ? "" : "(对方不在线?)");
+}
+
+static const char *kind_json(const conn_t *c) { return c->udp ? "udp" : c->fam == 6 ? "tcp6" : "tcp4"; }
+
+/* netcheck --json: 字段名英文, 状态说明原样(中文)放在 *_state 里给人看 */
+void netcheck_json(buf_t *o)
+{
+    char ips[16][48], tp[200], up[200], v6[64]; int ni = p_local_ipv4s(ips, 16);
+    add(o, "{\"name\":"); json_str(o, G.name);
+    add(o, ",\"capability\":\"%s\",\"local_addrs\":[", G.r4 && G.r6 ? "dualstack" : G.r4 ? "public" : G.r6 ? "ipv6" : G.punch[0] || G.upunch[0] ? "p2p" : "relay");
+    for (int k = 0; k < ni; k++) { if (k) add(o, ","); json_str(o, ips[k]); }
+    add(o, "],\"tcp_in\":{\"ok\":%s,\"addr\":", G.r4 ? "true" : "false"); json_str(o, G.r4 ? relay_addr() : "");
+    add(o, ",\"state\":"); json_str(o, G.port_state);
+    add(o, "},\"udp_in\":{\"ok\":%s,\"state\":", G.uin_ok ? "true" : "false"); json_str(o, G.uin_state);
+    add(o, "},\"upnp\":{\"tcp_port\":%d,\"udp_port\":%d,\"why\":", G.upnp_port, G.upnp_udp); json_str(o, G.upnp_off ? "off" : G.upnp_why);
+    int has6 = !local_ip6(v6, sizeof v6);
+    add(o, "},\"ipv6\":{\"addr\":"); json_str(o, has6 ? v6 : "");
+    add(o, ",\"ok\":%s,\"state\":", G.r6 ? "true" : "false"); json_str(o, G.port6_state);
+    punch_desc(tp, up, sizeof tp);
+    add(o, "},\"punch\":{\"tcp\":"); json_str(o, G.punch); add(o, ",\"udp\":"); json_str(o, G.upunch);
+    add(o, ",\"tcp_state\":"); json_str(o, tp); add(o, ",\"udp_state\":"); json_str(o, up);
+    add(o, "},\"links\":[");
+    int first = 1;
+    for (int i = 0; i < MAXC; i++) {
+        conn_t *c = &G.c[i];
+        if (c->state != C_UP || !c->pm) continue;
+        add(o, "%s{\"name\":", first ? "" : ","); json_str(o, c->pm->name);
+        add(o, ",\"kind\":\"%s\",\"addr\":", kind_json(c)); json_str(o, c->addr);
+        add(o, ",\"rtt_ms\":%d}", c->rtt); first = 0;
+    }
+    add(o, "]}\n");
+}
+
+void ping_json(buf_t *o, const uint8_t ed[32])
+{
+    int best = conn_by_peer(ed), first = 1;
+    add(o, "{\"links\":[");
+    for (int i = 0; i < MAXC; i++) {
+        conn_t *c = &G.c[i];
+        if (c->state != C_UP || memcmp(c->peer, ed, 32)) continue;
+        add(o, "%s{\"kind\":\"%s\",\"addr\":", first ? "" : ",", kind_json(c)); json_str(o, c->addr);
+        add(o, ",\"rtt_ms\":%d,\"chosen\":%s}", c->rtt, i == best ? "true" : "false"); first = 0;
+    }
+    add(o, "],\"route\":");
+    if (best >= 0) add(o, "\"direct\"");
+    else { int k = route(ed, NULL, 0); if (k >= 0) { add(o, "{\"via\":"); json_str(o, name_of(G.c[k].peer)); add(o, "}"); } else add(o, "null"); }
+    add(o, "}\n");
 }
 
 void netcheck_text(buf_t *o)
@@ -434,6 +503,16 @@ int ctl_open(const char *dir, const char *target, const char *req)
     resp[k] = 0;
     if (strncmp(resp, "OK\n", 3)) { fprintf(stderr, "mesh %s: %s", strcmp(req, "sh") ? "connect" : "sh", k ? resp : "守护没回话\n"); p_close(fd); return -1; }
     return fd;
+}
+
+int cmd_info(const char *dir, const char *target, const char *req)   /* 只读查看: 把对方回的文字原样打印 */
+{
+    int fd = ctl_open(dir, target, req);
+    if (fd < 0) return 1;
+    char b[8192]; long r;
+    while ((r = p_recv(fd, b, sizeof b)) > 0) fwrite(b, 1, (size_t)r, stdout);
+    p_close(fd);
+    return 0;
 }
 
 int cmd_connect(const char *dir, const char *target, const char *port)

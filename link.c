@@ -548,6 +548,7 @@ static void tick(void)
         dial(t, 0);
     }
     net_watch();
+    events_tick();
     udp_sync();
     disc_tick();
     disc_pend_tick();
@@ -639,8 +640,8 @@ int mesh_run(const char *dir)
     }
     targets_sync();
     rel_start();
-    static pfd_t p[MAXC + MAXS + MAXQ + 2 * 16 + 8 + 8 + 8 + 8];
-    static int map[MAXC + MAXS + MAXQ + 2 * 16 + 8 + 8 + 8 + 8];
+    static pfd_t p[MAXC + MAXS + MAXQ + 2 * 16 + 8 + 8 + 8 + 8 + 8];
+    static int map[MAXC + MAXS + MAXQ + 2 * 16 + 8 + 8 + 8 + 8 + 8];
     for (;;) {
         int n = 0;
         if (G.lfd >= 0) { p[n].fd = G.lfd; p[n].ev = P_IN; map[n++] = -1; }
@@ -657,6 +658,7 @@ int mesh_run(const char *dir)
         sh_poll_add(p, &n, map);
         bench_poll_add(p, &n, map);
         file_poll_add(p, &n, map);
+        info_poll_add(p, &n, map);
         rel_poll_add(p, &n, map);
         pkg_poll_add(p, &n, map);
         int r = p_poll(p, n, udp_active() ? 20 : 300);   /* 有 UDP 链路: KCP 要 20ms 的节拍 */
@@ -678,6 +680,7 @@ int mesh_run(const char *dir)
             else if (m < 3000) hop_io(m - 2000, rev);
             else if (m < 4000) sh_io(m - 3000, rev);
             else if (m < 5000) rel_io(m - 4000, rev);
+            else if (m >= 9000) info_io(m - 9000, rev);
             else if (m >= 8000) file_io(m - 8000, rev);
             else if (m >= 7000) bench_io(m - 7000, rev);
             else pkg_io(m - 5000, rev);
@@ -688,6 +691,7 @@ int mesh_run(const char *dir)
         sh_tick();
         bench_tick();
         file_tick();
+        info_tick();
         rel_tick();
     }
 }

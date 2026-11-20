@@ -203,6 +203,7 @@ int64_t p_fsize(const char *path)
     if (!ok || (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
     return (int64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow;
 }
+void p_notify(const char *title, const char *msg) { (void)title; (void)msg; }
 int p_stderr_tty(void) { DWORD m; return GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &m) != 0; }
 int p_isdir(const char *path) { WCHAR *p = wide(path); DWORD a = p ? GetFileAttributesW(p) : INVALID_FILE_ATTRIBUTES; free(p); return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY); }
 int p_remove(const char *path) { WCHAR *p = wide(path); int r = p ? _wremove(p) : -1; free(p); return r; }

@@ -46,7 +46,7 @@ echo "== 3b 高延迟线路: 窗口自动长大(回环加 25ms 单程延迟 = �
 if command -v tc >/dev/null && tc qdisc add dev lo root netem delay 25ms 2>/dev/null; then
   sleep 6; o=$($M bench "$T/x" r 4 2>&1); tc qdisc del dev lo root 2>/dev/null; echo "$o" | grep -E "上传|下载" | sed 's/^/     /'
   dn=$(echo "$o" | sed -n 's/^下载 \([0-9.]*\) MB.*/\1/p')
-  ok "来回 50ms 时下载超过固定窗口的上限(> 10 MB/s, 实测 $dn)" 'awk -v d="$dn" "BEGIN{exit !(d > 10)}"'
+  ok "来回 50ms 时下载超过固定窗口的上限(固定 256KB 约 5 MB/s; 要 > 6.5, 实测 $dn)" 'awk -v d="$dn" "BEGIN{exit !(d > 6.5)}"'
 else echo "  (没有 tc / netem, 跳过)"; fi
 
 echo "== 4 网络变了马上重查重连"

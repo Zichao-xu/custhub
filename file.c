@@ -216,6 +216,27 @@ void file_tick(void)
 }
 
 /* ---------- 客户端(custhub send / pull) ---------- */
+/* 结果: 人看的写 stderr / stdout; --json 时只在最后打一行 JSON 到 stdout */
+static int JS; static char ERR_[400];
+static int bad(const char *fmt, const char *a)
+{
+    snprintf(ERR_, sizeof ERR_, fmt, a ? a : "");
+    size_t n = strlen(ERR_); while (n && ERR_[n - 1] == '\n') ERR_[--n] = 0;
+    if (!JS) fprintf(stderr, "%s\n", ERR_);
+    return 1;
+}
+static int result(const char *op, int rc, const char *who, const char *path, int64_t bytes, int64_t from, int64_t t0)
+{
+    if (!JS) return rc;
+    buf_t o = { 0 }; char h[200];
+    int n = snprintf(h, sizeof h, "{\"op\":\"%s\",\"ok\":%s,\"name\":", op, rc ? "false" : "true"); buf_add(&o, h, (size_t)n); json_str(&o, who);
+    buf_add(&o, ",\"path\":", 8); json_str(&o, path ? path : "");
+    n = snprintf(h, sizeof h, ",\"bytes\":%lld,\"resumed_from\":%lld,\"ms\":%lld,\"error\":", (long long)bytes, (long long)from, (long long)(now_ms() - t0)); buf_add(&o, h, (size_t)n);
+    if (rc) json_str(&o, ERR_); else buf_add(&o, "null", 4);
+    buf_add(&o, "}\n", 2); fwrite(o.p, 1, o.len, stdout); buf_free(&o);
+    return rc;
+}
+
 static int line_in(int fd, char *out, size_t cap)
 {
     size_t k = 0; char c;
@@ -227,6 +248,7 @@ static void progress(int64_t done, int64_t total, int64_t t0, int fin)
 {
     static int64_t last; static int tty = -1;
     if (tty < 0) tty = p_stderr_tty();
+    if (JS) return;
     int64_t now = now_ms();
     if (!fin && (!tty || now - last < 500)) return;      /* 不在终端里(脚本、AI 调用): 不刷进度, 只给最后一行 */
     last = now;
@@ -235,66 +257,68 @@ static void progress(int64_t done, int64_t total, int64_t t0, int fin)
     if (fin) fprintf(stderr, "\n");
 }
 
-int cmd_send(const char *dir, const char *local, const char *who, const char *rpath)
+int cmd_send(const char *dir, const char *local, const char *who, const char *rpath, int json)
 {
+    JS = json; int64_t T0 = now_ms();
     int64_t size = p_fsize(local);
-    if (size < 0) { fprintf(stderr, p_isdir(local) ? "%s 是目录(一次只传一个文件)\n" : "本机没有这个文件: %s\n", local); return 1; }
+    if (size < 0) return result("send", bad(p_isdir(local) ? "%s 是目录(一次只传一个文件)" : "本机没有这个文件: %s", local), who, rpath, 0, 0, T0);
     char hx[65]; if (p_stderr_tty()) fprintf(stderr, "  核对用的哈希…\r");
-    if (hash_file(local, -1, NULL, hx)) { fprintf(stderr, "读不了 %s\n", local); return 1; }
+    if (hash_file(local, -1, NULL, hx)) return result("send", bad("读不了 %s", local), who, rpath, 0, 0, T0);
     int fd = ctl_open(dir, who, "file");
-    if (fd < 0) return 1;
+    if (fd < 0) return result("send", bad("连不上 %s(不在线、没通行证, 或对方不支持传文件)", who), who, rpath, 0, 0, T0);
     char h[1600]; int n = snprintf(h, sizeof h, "PUT %lld %s\n%s\n%s\n", (long long)size, hx, rpath, base_of(local));
-    if (p_send(fd, h, (size_t)n) != n) { fprintf(stderr, "发不出去\n"); return 1; }
-    char l[700];
-    if (line_in(fd, l, sizeof l) || strncmp(l, "OK ", 3)) { fprintf(stderr, "对方拒绝: %s\n", strncmp(l, "ERR ", 4) ? l : l + 4); p_close(fd); return 1; }
+    if (p_send(fd, h, (size_t)n) != n) return result("send", bad("发不出去%s", ""), who, rpath, 0, 0, T0);
+    char l[700]; l[0] = 0;
+    if (line_in(fd, l, sizeof l) || strncmp(l, "OK ", 3)) { p_close(fd); return result("send", bad("对方拒绝: %s", strncmp(l, "ERR ", 4) ? l : l + 4), who, rpath, 0, 0, T0); }
     int64_t from = atoll(l + 3);
     void *f = p_fopen(local, "rb");
-    if (!f || p_fseek64(f, from)) { fprintf(stderr, "读不了 %s\n", local); return 1; }
-    if (from) fprintf(stderr, "  接着上次的 %lld MB 续传\n", (long long)(from >> 20));
+    if (!f || p_fseek64(f, from)) return result("send", bad("读不了 %s", local), who, rpath, 0, 0, T0);
+    if (from && !JS) fprintf(stderr, "  接着上次的 %lld MB 续传\n", (long long)(from >> 20));
     static uint8_t b[FCHUNK]; size_t r; int64_t done = from, t0 = now_ms();
     const char *dly = getenv("CUSTHUB_SEND_DELAY_MS");   /* 测试用: 每块之间停一下, 好在半截掐断 */
     while ((r = fread(b, 1, sizeof b, (FILE *)f)) > 0) {
         if (dly) p_sleep_ms(atoi(dly));
-        if (p_send(fd, b, r) != (long)r) { fprintf(stderr, "\n传到一半断了(再执行一次同样的命令会接着传)\n"); fclose((FILE *)f); return 1; }
+        if (p_send(fd, b, r) != (long)r) { fclose((FILE *)f); return result("send", bad("传到一半断了(再执行一次同样的命令会接着传)%s", ""), who, rpath, done, from, T0); }
         done += (int64_t)r; progress(done, size, t0, 0);
     }
     fclose((FILE *)f); progress(done, size, t0, 1);
-    if (line_in(fd, l, sizeof l)) { fprintf(stderr, "对方没回确认(连接断了?), 再执行一次会续传\n"); return 1; }
+    if (line_in(fd, l, sizeof l)) return result("send", bad("对方没回确认(连接断了?), 再执行一次会续传%s", ""), who, rpath, done, from, T0);
     p_close(fd);
-    if (strcmp(l, "DONE")) { fprintf(stderr, "对方: %s\n", strncmp(l, "ERR ", 4) ? l : l + 4); return 1; }
-    printf("已发到 %s: %s\n", who, rpath);
-    return 0;
+    if (strcmp(l, "DONE")) return result("send", bad("对方: %s", strncmp(l, "ERR ", 4) ? l : l + 4), who, rpath, done, from, T0);
+    if (!JS) printf("已发到 %s: %s\n", who, rpath);
+    return result("send", 0, who, rpath, size, from, T0);
 }
 
-int cmd_pull(const char *dir, const char *local, const char *who, const char *rpath)
+int cmd_pull(const char *dir, const char *local, const char *who, const char *rpath, int json)
 {
+    JS = json; int64_t T0 = now_ms();
     int fd = ctl_open(dir, who, "file");
-    if (fd < 0) return 1;
+    if (fd < 0) return result("pull", bad("连不上 %s(不在线、没通行证, 或对方不支持传文件)", who), who, local, 0, 0, T0);
     char h[1200]; int n = snprintf(h, sizeof h, "GET\n%s\n", rpath);
-    if (p_send(fd, h, (size_t)n) != n) { fprintf(stderr, "发不出去\n"); return 1; }
-    char l[700], hx[80], nm[400];
+    if (p_send(fd, h, (size_t)n) != n) return result("pull", bad("发不出去%s", ""), who, local, 0, 0, T0);
+    char l[700] = "", hx[80], nm[400];
     long long size;
-    if (line_in(fd, l, sizeof l) || sscanf(l, "OK %lld %79s %399[^\n]", &size, hx, nm) != 3) { fprintf(stderr, "对方: %s\n", strncmp(l, "ERR ", 4) ? l : l + 4); p_close(fd); return 1; }
+    if (line_in(fd, l, sizeof l) || sscanf(l, "OK %lld %79s %399[^\n]", &size, hx, nm) != 3) { p_close(fd); return result("pull", bad("对方: %s", strncmp(l, "ERR ", 4) ? l : l + 4), who, local, 0, 0, T0); }
     char path[1100], part[1200];
     target_of(local, nm, path, sizeof path);
     snprintf(part, sizeof part, "%s.%.8s.custhub-part", path, hx);
     int64_t have = p_fsize(part);
     if (have < 0 || have > size) have = 0;
     void *f = p_fopen(part, have ? "ab" : "wb");
-    if (!f) { fprintf(stderr, "本机写不了 %s\n", part); return 1; }
-    if (have) fprintf(stderr, "  接着上次的 %lld MB 续传\n", (long long)(have >> 20));
+    if (!f) return result("pull", bad("本机写不了 %s", part), who, path, 0, 0, T0);
+    if (have && !JS) fprintf(stderr, "  接着上次的 %lld MB 续传\n", (long long)(have >> 20));
     n = snprintf(h, sizeof h, "FROM %lld\n", (long long)have);
-    if (p_send(fd, h, (size_t)n) != n) { fclose((FILE *)f); return 1; }
+    if (p_send(fd, h, (size_t)n) != n) { fclose((FILE *)f); return result("pull", bad("发不出去%s", ""), who, path, 0, have, T0); }
     static uint8_t b[FCHUNK]; long r; int64_t done = have, t0 = now_ms();
     while (done < size && (r = p_recv(fd, b, sizeof b)) > 0) {
-        if (fwrite(b, 1, (size_t)r, (FILE *)f) != (size_t)r) { fprintf(stderr, "\n本机写盘失败\n"); fclose((FILE *)f); return 1; }
+        if (fwrite(b, 1, (size_t)r, (FILE *)f) != (size_t)r) { fclose((FILE *)f); return result("pull", bad("本机写盘失败%s", ""), who, path, done, have, T0); }
         done += r; progress(done, size, t0, 0);
     }
     fclose((FILE *)f); p_close(fd); progress(done, size, t0, 1);
-    if (done < size) { fprintf(stderr, "传到一半断了(再执行一次同样的命令会接着传)\n"); return 1; }
+    if (done < size) return result("pull", bad("传到一半断了(再执行一次同样的命令会接着传)%s", ""), who, path, done, have, T0);
     char got[65];
-    if (hash_file(part, -1, NULL, got) || strcmp(got, hx)) { p_remove(part); fprintf(stderr, "收到的内容和原文件对不上(已丢弃, 重传一次)\n"); return 1; }
-    if (p_replace(part, path)) { fprintf(stderr, "收齐了但放不到 %s(被占用? 没权限?)\n", path); return 1; }
-    printf("已拉到本机: %s\n", path);
-    return 0;
+    if (hash_file(part, -1, NULL, got) || strcmp(got, hx)) { p_remove(part); return result("pull", bad("收到的内容和原文件对不上(已丢弃, 重传一次)%s", ""), who, path, done, have, T0); }
+    if (p_replace(part, path)) return result("pull", bad("收齐了但放不到 %s(被占用? 没权限?)", path), who, path, done, have, T0);
+    if (!JS) printf("已拉到本机: %s\n", path);
+    return result("pull", 0, who, path, size, have, T0);
 }

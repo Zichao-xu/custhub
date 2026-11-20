@@ -19,6 +19,9 @@
 #define MAXTEXT   (32 * 1024)    /* 名单文件 */
 #define MAXMSG    65535          /* 一条 Noise 消息 */
 #define CHUNK     16000          /* 一个 DATA 帧最多带的明文 */
+/* 本机支持的功能(记录里报给别人, |f=): 用到某个功能前先看对方有没有, 不按版本号猜(升级途中新旧混跑也不误判)
+ * who: F_WHO 查映射  uprobe: UDP 入站验证  bench: 测速服务  file: 传文件服务  info: 远程只读查看  events: 事件 */
+#define FEATURES  "who,uprobe,bench,file,info,events"
 #define WIN       (256 * 1024)   /* 每条流每个方向起步的在途额度(明文字节) */
 #define WINMAX    (8 * 1024 * 1024)   /* 收方把窗口长到的上限(高延迟线路: 延迟 x 带宽) */
 #define WINBUDGET (64L * 1024 * 1024) /* 所有流多给的窗口加起来的上限(防内存撑爆) */
@@ -68,6 +71,7 @@ typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
     int relay; char addr[64], relays[160], status[320], ver[16], info[200];
     char addr6[80];               /* "" = 没报 IPv6; "-" = 有 IPv6 出口但连不进来; "[…]:端口" = IPv6 可达 */
+    char feats[160];              /* 自报支持的功能(逗号分开; 老版本没有 = 空) */
     char upunch[64];              /* 自报的 UDP 打洞端点(UDP 端口在公网上的映射) */
     char punch[64];               /* 自报的打洞端点(本机打洞端口在公网上的映射, 不同目的地映射不变时才报) */
     char eps[200];                /* 自报的局域网端点 "10.0.0.5:8444,192.168.1.2:8444"(多端点: 别人都试一遍, 同一局域网的自然直连) */   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
@@ -170,7 +174,9 @@ extern g_t G;
 
 void log_open(const char *path);
 char *m_tok(char *s, const char *delim, char **save);
-void json_str(buf_t *o, const char *s);                 /* util.c: 追加一个 JSON 字符串(带引号、转义) */   /* strtok_r(Win7 的 msvcrt 没有) */
+void json_str(buf_t *o, const char *s);
+const char *log_path(void);                              /* util.c: 本机日志文件路径 */
+const void *m_mem(const void *h, size_t hn, const void *n, size_t nn);   /* util.c: memmem */                 /* util.c: 追加一个 JSON 字符串(带引号、转义) */   /* strtok_r(Win7 的 msvcrt 没有) */
 int  cmd_mesh(int argc, char **argv);                    /* main.c: mesh 子命令入口 */
 int  cmd_passcheck(char **a);
 /* sshsig.c: ssh-keygen -Y sign 格式验签(只认给定公钥) → 1 通过 */
@@ -232,6 +238,7 @@ const char *hint_addr6(const uint8_t ed[32]);
 void hint_note6(const uint8_t ed[32], const char *addr6);   /* 同上, IPv6 那个 */
 size_t hints_text(char *o, size_t cap);
 int  hint_import(const char *line);                       /* "<公钥> <v4|-> [<v6>]" 记进地址簿, 返回新增 / 变了几个 */                  /* 种子里的 "hint <公钥> <地址>" 行(只含名单成员) */
+int  has_feat(const uint8_t ed[32], const char *f);      /* 对方(或本机)报了支持这个功能 */
 int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
 /* qual.c: 可达自检 */
 void qual_tick(void);
@@ -285,13 +292,26 @@ int  svc_open(const uint8_t rs[32], const char *req, const char *pass, size_t pl
 /* sh.c: sh 服务 */
 int  sh_accept(char *why, size_t wcap);                  /* 新会话 → 交给连通层的本地 fd */
 void sh_poll_add(pfd_t *p, int *np, int *map);           /* map 编号 3000 起 */
+/* events.c: 事件(watch / wait / 告警) */
+void events_tick(void);
+void events_text(buf_t *o, long since, int json);
+long events_last(void);
+int  events_check(const char *name, const char *cond, const char *val, char *out, size_t cap);
+int  cmd_watch(const char *dir, int json, int notify);
+int  cmd_wait(const char *dir, const char *name, const char *cond, const char *val, int tmo);
+/* info.c: 远程只读查看 */
+int  info_accept(const char *req, char *why, size_t wcap);
+void info_poll_add(pfd_t *p, int *np, int *map);         /* map 编号 9000 起 */
+void info_io(int k, short rev);
+void info_tick(void);
+void log_tail(buf_t *o, int lines, const char *key);
 /* file.c: 传文件 */
 int  file_accept(char *why, size_t wcap);
 void file_poll_add(pfd_t *p, int *np, int *map);         /* map 编号 8000 起 */
 void file_io(int k, short rev);
 void file_tick(void);
-int  cmd_send(const char *dir, const char *local, const char *who, const char *rpath);
-int  cmd_pull(const char *dir, const char *local, const char *who, const char *rpath);
+int  cmd_send(const char *dir, const char *local, const char *who, const char *rpath, int json);
+int  cmd_pull(const char *dir, const char *local, const char *who, const char *rpath, int json);
 /* bench.c: 测速服务 */
 int  bench_accept(const char *req, char *why, size_t wcap);
 void bench_poll_add(pfd_t *p, int *np, int *map);        /* map 编号 7000 起 */
@@ -330,9 +350,12 @@ int  cmd_ctl(const char *dir, const char *line);
 void ls_text(buf_t *o);
 void ping_text(buf_t *o, const uint8_t ed[32]);          /* custhub ping: 到对端的各条链路、延迟、现在走哪条 */
 void netcheck_text(buf_t *o);
+void netcheck_json(buf_t *o);
+void ping_json(buf_t *o, const uint8_t ed[32]);
 void inventory_text(buf_t *o, int json);
 int  targets_resolve(const char *expr, char *out, size_t cap);   /* app.c: 目标表达式 → 名字列表 */
-int  cmd_exec(int argc, char **argv);                    /* exec.c */                 /* custhub inventory: 所有机器的基本信息(位置记录里的, 不连机器) */                            /* custhub netcheck: 本机网络状况 */
+int  cmd_exec(int argc, char **argv);                    /* exec.c */
+int  cmd_info(const char *dir, const char *target, const char *req);   /* app.c: 远程只读查看 */                 /* custhub inventory: 所有机器的基本信息(位置记录里的, 不连机器) */                            /* custhub netcheck: 本机网络状况 */
 void punch_desc(char *tcp, char *udp, size_t cap);       /* punch.c: TCP / UDP 打洞查映射的结果说明 */
 void net_watch(void);
 void punch_reset(void);                                  /* punch.c: 网络变了, 马上重查映射、重新打洞 */

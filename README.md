@@ -44,6 +44,19 @@ custhub exec <目标> [--json] [--timeout 秒] -- 命令  # 并行跑; 目标: A
 
 给 AI 用的说明在 `skills/custhub/SKILL.md`（Claude Code 的 skill 格式，其他 AI 也能当说明书读）：先 `inventory --json` 看全局，用 `exec` 而不是往终端里灌按键，被拒时请人签通行证。
 
+### 看别的机器、等待、事件
+
+```sh
+custhub netcheck A-2 [--json]                       # 别的机器的网络状况(只读; 要 info 或 sh 通行证)
+custhub log [A-2] [--grep 关键字] [--lines N]          # 日志: 不给名字是本机; 别的机器要 info 或 sh 通行证
+custhub wait A-2 version 0.3.48 [--timeout 秒]      # 等到条件成立(online offline reachable direct version); 超时返回 4
+custhub watch [--json] [--notify]                   # 持续看事件; --notify 在离线满 10 分钟、版本落后满 30 分钟、能力变差时弹桌面通知
+```
+
+**功能协商**：每台机器在位置记录里报自己支持哪些功能（`|f=`，`inventory --json` 里的 `features`）。用到某个功能前先看对方有没有：没有就当场报「对方还不支持」，不再按版本号猜，升级途中新旧版本混跑也不会误判。
+
+`ping`、`netcheck`、`bench`、`send`、`pull`、`inventory` 都能加 `--json`。
+
 ### 传文件
 
 ```sh

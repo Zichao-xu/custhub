@@ -91,6 +91,17 @@ int mtrust_parse(const char *text, size_t len, trust_t *t, const uint8_t master[
 
 static void recompute_role(void) { }                  /* 可达节点不再由名单决定(qual.c 自检) */
 
+int has_feat(const uint8_t ed[32], const char *f)
+{
+    const char *list = !memcmp(ed, G.id.ed, 32) ? FEATURES : NULL;
+    rec_t *r = list ? NULL : rec_by_ed(ed);
+    if (!list) list = r ? r->feats : "";
+    size_t n = strlen(f);
+    for (const char *p = list; (p = strstr(p, f)); p += n)
+        if ((p == list || p[-1] == ',') && (p[n] == ',' || !p[n])) return 1;
+    return 0;
+}
+
 int ed_relay(const uint8_t ed[32])
 {
     member_t *m = member_by_ed(ed);
@@ -318,8 +329,10 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
         if (su) { *su = 0; snprintf(r->upunch, sizeof r->upunch, "%s", su + 3); }
         char *sp = strstr(bar + 1, "|p=");
         if (sp) { *sp = 0; snprintf(r->punch, sizeof r->punch, "%s", sp + 3); }
-        char *se = strstr(bar + 1, "|e=");
+        char *se = strstr(bar + 1, "|e=");               /* 从右往左切: …|f=功能|e=端点 */
         if (se) { *se = 0; snprintf(r->eps, sizeof r->eps, "%s", se + 3); }
+        char *sf = strstr(bar + 1, "|f=");
+        if (sf) { *sf = 0; snprintf(r->feats, sizeof r->feats, "%s", sf + 3); }
         snprintf(r->info, sizeof r->info, "%s", bar + 1);
     }
     snprintf(r->ver, sizeof r->ver, "%s", f[7]);
@@ -442,8 +455,8 @@ void disc_tick(void)
     }
     char pun[160] = ""; if (G.punch[0] && !G.r4) snprintf(pun, sizeof pun, "|p=%s", G.punch);
     if (G.upunch[0]) { size_t l = strlen(pun); snprintf(pun + l, sizeof pun - l, "|u=%s", G.upunch); }
-    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s%s", G.me_relay ? "relay" : "node",
-             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, pun, six);
+    snprintf(body, sizeof body, "%s %s %s %s %s|%s|f=%s%s%s%s", G.me_relay ? "relay" : "node",
+             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), FEATURES, eps, pun, six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {
         uint64_t wall = (uint64_t)wall_ms();
         G.myseq = wall > G.myseq ? wall : G.myseq + 1;

@@ -29,9 +29,11 @@ void buf_free(buf_t *b) { free(b->p); b->p = NULL; b->len = b->cap = 0; }
 
 
 /* 日志: conf 里给了 log 就写文件(超过 1MB 换到 .1), 否则 stderr */
-static FILE *logfp;
+static FILE *logfp; static char logp[600];
+const char *log_path(void) { return logp; }
 void log_open(const char *path)
 {
+    snprintf(logp, sizeof logp, "%s", path);
     char old[600];
     FILE *f = fopen(path, "rb");
     if (f) {
@@ -152,4 +154,11 @@ void json_str(buf_t *o, const char *s)
         if (r) buf_add(o, r, strlen(r)); else buf_add(o, p, 1);
     }
     buf_add(o, "\"", 1);
+}
+
+const void *m_mem(const void *h, size_t hn, const void *n, size_t nn)
+{
+    if (!nn) return h;
+    for (size_t i = 0; i + nn <= hn; i++) if (!memcmp((const char *)h + i, n, nn)) return (const char *)h + i;
+    return NULL;
 }

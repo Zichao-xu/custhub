@@ -20,6 +20,7 @@ custhub inventory --json
 - `capability`: `dualstack` / `public`(能被连进来) / `ipv6` / `p2p`(能打洞) / `relay`(只能中转)
 - `link`: 本机到它现在怎么连 `{kind: tcp4|tcp6|udp, addr, rtt_ms}`, 或 `{kind: relay, via}`, 或 `null`(不通)
 - `platform` 以 `win7-` 开头的是 Win7, `win-` 是 Win10/11, `linux-`、`mac-`
+- `features`: 它支持的功能(`file` 传文件、`bench` 测速、`info` 远程查看…); 没有的就别对它用, 会直接报「对方还不支持」
 
 ## 跑命令(一台或多台, 并行)
 ```
@@ -39,12 +40,24 @@ custhub send <本机文件> <名字> <对方路径>     # 对方路径是目录(
 custhub pull <本机路径> <名字> <对方文件>     # 本机路径是目录就放进去
 ```
 一次一个文件; 断了再执行同一条命令会续传; 传完核对哈希, 对不上不留文件; 中文和空格路径都行。要 `file` 或 `sh` 通行证。
+加 `--json`: 只在最后打一行 `{op, ok, name, path, bytes, resumed_from, ms, error}`, 不刷进度。
 
 ## 网络和诊断(只读本机, 不用问)
-- `custhub ping <名字>`: 到它的每条直连(TCP IPv4/IPv6、UDP)和延迟, 走哪条
-- `custhub netcheck`: 本机能不能被连进来、UPnP、IPv6、打洞、到各台的延迟
+- `custhub ping <名字> [--json]`: 到它的每条直连(TCP IPv4/IPv6、UDP)和延迟, 走哪条
+- `custhub netcheck [--json]`: 本机能不能被连进来、UPnP、IPv6、打洞、到各台的延迟
+- `custhub log [--grep 关键字] [--lines N]`: 本机日志
 - `custhub ls`: 守护的原始状态(人看的)
-- `custhub bench <名字> [秒]`: 测上传 / 下载速度(会占对方带宽, **先问人**; 要 `sh` 通行证)
+- `custhub bench <名字> [秒] [--json]`: 测上传 / 下载速度(会占对方带宽, **先问人**; 要 `sh` 通行证)
+
+## 看别的机器(只读, 要 info 或 sh 通行证; 也算连别人的机器, 先问人)
+- `custhub netcheck <名字> [--json]`: 它的网络状况
+- `custhub log <名字> [--grep 关键字] [--lines N]`: 它的日志(只要含关键字的最后几行)
+
+## 等待和事件(不用自己写轮询)
+- `custhub wait <名字> online|offline|reachable|direct|version <版本> [--timeout 秒]`: 条件成立返回 0, 超时返回 4
+  例: 发版后 `custhub wait A-2 version 0.3.48 --timeout 600`
+- `custhub watch --json`: 持续输出事件, 每行 `{id, time, name, type, from, to}`;
+  type: `online` `offline` `offline_long`(离线满 10 分钟) `version` `capability` `link`(direct/relay/none) `behind`(版本落后满 30 分钟)
 
 ## 常见情况
 - `exec` 某台 `✘ 名单里没有…` / 分组不认识: 用 `inventory` 看名字

@@ -78,7 +78,7 @@ static void stun_tick(int64_t now)
     }
     if (now < next_q && !nask) return;
     if (!nask) for (int i = 0, k = 0; i < MAXC && k < 2; i++)   /* 每轮也经已有的打洞链路问(任何直连的成员都能答) */
-        if (G.c[i].state == C_UP && G.c[i].punch && !G.c[i].udp) { conn_send(i, F_WHO, 0, NULL, 0); k++; }
+        if (G.c[i].state == C_UP && G.c[i].punch && !G.c[i].udp && has_feat(G.c[i].peer, "who")) { conn_send(i, F_WHO, 0, NULL, 0); k++; }
     const char *ad = pick(); char h[64], why[96]; int port;
     if (!ad || nask >= 2) { if (nask || ngot) round_done(now); else next_q = now + 5000; return; }   /* 还不知道哪台可达: 5 秒后再看 */
     snprintf(asked[nask++], sizeof asked[0], "%s", ad);

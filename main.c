@@ -29,11 +29,17 @@ static int is_node_dir(const char *d)                    /* 有 conf 或 node.ke
 int cmd_mesh(int argc, char **argv)
 {
     argv = p_args_utf8(argc, argv);
+    int JSON = 0;                                        /* --json(除了 exec 自己处理): 给脚本 / AI 的结构化输出 */
+    if (argc > 1 && strcmp(argv[1], "exec")) {
+        int w = 1;
+        for (int r = 1; r < argc; r++) { if (!strcmp(argv[r], "--json")) JSON = 1; else argv[w++] = argv[r]; }
+        argc = w; argv[argc] = NULL;
+    }
     p_private_files();                                   /* 钥匙、令牌、通行证、日志: 只有自己能读写 */
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull") || !strcmp(c, "inventory") || !strcmp(c, "exec")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull") || !strcmp(c, "inventory") || !strcmp(c, "exec") || !strcmp(c, "log") || !strcmp(c, "watch") || !strcmp(c, "wait")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -86,23 +92,49 @@ int cmd_mesh(int argc, char **argv)
         *nl = 0; fprintf(stderr, "%s\n", strcmp(b, "-") ? b : "(网里没有可达的 0.3.11 以上的机器, 用 GitHub 的; Win7 用不了)");
         fputs(nl + 1, stdout); return 0;
     }
-    if (argc == 4 && !strcmp(c, "ping")) {               /* 到某台的各条链路、延迟、现在走哪条; 每秒一次, 共 4 次 */
-        char l[120]; snprintf(l, sizeof l, "PING %s", argv[3]);
+    if (argc == 4 && !strcmp(c, "ping")) {               /* 到某台的各条链路、延迟、现在走哪条; 每秒一次, 共 4 次(--json 只要一次) */
+        char l[120]; snprintf(l, sizeof l, "PING %s%s", argv[3], JSON ? " json" : "");
+        if (JSON) return cmd_ctl(argv[2], l);
         for (int k = 0; k < 4; k++) { if (k) { p_sleep_ms(1000); printf("\n"); } if (cmd_ctl(argv[2], l)) return 1; fflush(stdout); }
         return 0;
     }
-    if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");
-    if ((argc == 3 || argc == 4) && !strcmp(c, "inventory")) {   /* 所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连); --json 给脚本 / AI */
-        if (argc == 4 && strcmp(argv[3], "--json")) { fprintf(stderr, "用法: custhub inventory [--json]\n"); return 2; }
-        return cmd_ctl(argv[2], argc == 4 ? "INV json" : "INV");
+    if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], JSON ? "NETCHECK json" : "NETCHECK");
+    if (argc == 4 && !strcmp(c, "netcheck")) return cmd_info(argv[2], argv[3], JSON ? "info:netcheck:json" : "info:netcheck");   /* 看别的机器的 netcheck(只读; 要 info 或 sh 通行证) */
+    if (argc >= 3 && !strcmp(c, "log")) {                /* custhub log [名字] [--grep 关键字] [--lines 行数]: 不给名字 = 本机 */
+        const char *who = NULL, *key = ""; int lines = 100;
+        for (int k = 3; k < argc; k++) {
+            if (!strcmp(argv[k], "--grep") && k + 1 < argc) key = argv[++k];
+            else if (!strcmp(argv[k], "--lines") && k + 1 < argc) lines = atoi(argv[++k]);
+            else if (argv[k][0] != '-' && !who) who = argv[k];
+            else { fprintf(stderr, "用法: custhub log [名字] [--grep 关键字] [--lines 行数]\n"); return 2; }
+        }
+        char ek[200]; size_t el = 0;                     /* 关键字里的空格、% 编码一下(请求按空格分段) */
+        for (const char *c2 = key; *c2 && el < sizeof ek - 4; c2++) { if (*c2 == ' ') { memcpy(ek + el, "%20", 3); el += 3; } else if (*c2 == '%') { memcpy(ek + el, "%25", 3); el += 3; } else ek[el++] = *c2; }
+        ek[el] = 0;
+        char rq[300];
+        if (!who) { snprintf(rq, sizeof rq, "LOG %d %s", lines, ek); return cmd_ctl(argv[2], rq); }
+        snprintf(rq, sizeof rq, "info:log:%d:%s", lines, ek);
+        return cmd_info(argv[2], who, rq);
     }
+    if (argc == 3 && !strcmp(c, "inventory")) return cmd_ctl(argv[2], JSON ? "INV json" : "INV");   /* 所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连) */
     if (argc >= 4 && !strcmp(c, "exec")) return cmd_exec(argc - 2, argv + 2);
-    if (argc == 6 && !strcmp(c, "send")) return cmd_send(argv[2], argv[3], argv[4], argv[5]);   /* custhub send 本机文件 A-2 对方路径 */
-    if (argc == 6 && !strcmp(c, "pull")) return cmd_pull(argv[2], argv[3], argv[4], argv[5]);   /* custhub pull 本机路径 A-2 对方文件 */
+    if (argc >= 3 && !strcmp(c, "watch")) {              /* custhub watch [--json] [--notify] */
+        int nt = 0; for (int k = 3; k < argc; k++) { if (!strcmp(argv[k], "--notify")) nt = 1; else { fprintf(stderr, "用法: custhub watch [--json] [--notify]\n"); return 2; } }
+        return cmd_watch(argv[2], JSON, nt);
+    }
+    if (argc >= 5 && !strcmp(c, "wait")) {               /* custhub wait <名字> <条件> [值] [--timeout 秒] */
+        const char *val = NULL; int tmo = 600, k = 5;
+        if (k < argc && strcmp(argv[k], "--timeout")) val = argv[k++];
+        if (k + 1 < argc && !strcmp(argv[k], "--timeout")) { tmo = atoi(argv[k + 1]); k += 2; }
+        if (k != argc || (!strcmp(argv[4], "version") && !val)) { fprintf(stderr, "用法: custhub wait <名字> <online|offline|reachable|direct|version 版本> [--timeout 秒]\n"); return 2; }
+        return cmd_wait(argv[2], argv[3], argv[4], val, tmo);
+    }
+    if (argc == 6 && !strcmp(c, "send")) return cmd_send(argv[2], argv[3], argv[4], argv[5], JSON);   /* custhub send 本机文件 A-2 对方路径 */
+    if (argc == 6 && !strcmp(c, "pull")) return cmd_pull(argv[2], argv[3], argv[4], argv[5], JSON);   /* custhub pull 本机路径 A-2 对方文件 */
     if ((argc == 4 || argc == 5) && !strcmp(c, "bench")) {   /* 测速: 上传、下载各测几秒(默认 5), 走平常的流(同样的加密、额度、选路) */
         int secs = argc == 5 ? atoi(argv[4]) : 5; if (secs < 1 || secs > 60) secs = 5;
         char l[120]; snprintf(l, sizeof l, "PING %s", argv[3]);
-        if (cmd_ctl(argv[2], l)) return 1;
+        if (!JSON && cmd_ctl(argv[2], l)) return 1;
         static uint8_t z[65536]; memset(z, 0, sizeof z);
         int fd = ctl_open(argv[2], argv[3], "bench:up");   /* 上传: 往对方灌, 对方收下就扔 */
         if (fd < 0) return 1;
@@ -117,7 +149,8 @@ int cmd_mesh(int argc, char **argv)
         while ((r = p_recv(fd, z, sizeof z)) > 0) { if (!t1) t1 = now_ms(); got += r; }
         double dn = t1 ? got / ((now_ms() - t1) / 1000.0 + 0.001) / 1048576.0 : 0;
         p_close(fd);
-        printf("上传 %.2f MB/s(%lld MB / %d 秒, 含发送缓冲, 略偏高)\n下载 %.2f MB/s(%lld MB)\n", up, (long long)(sent >> 20), secs, dn, (long long)(got >> 20));
+        if (JSON) printf("{\"name\":\"%s\",\"secs\":%d,\"up_mbps\":%.2f,\"down_mbps\":%.2f,\"up_bytes\":%lld,\"down_bytes\":%lld}\n", argv[3], secs, up, dn, (long long)sent, (long long)got);
+        else printf("上传 %.2f MB/s(%lld MB / %d 秒, 含发送缓冲, 略偏高)\n下载 %.2f MB/s(%lld MB)\n", up, (long long)(sent >> 20), secs, dn, (long long)(got >> 20));
         return 0;
     }   /* 本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟 */
     if (argc == 3 && !strcmp(c, "code")) {               /* 本机接入码 */
@@ -170,6 +203,10 @@ int cmd_mesh(int argc, char **argv)
             "  custhub pull <本机路径> <名字> <对方文件>     把对方的文件拉过来(本机路径是目录就放进去); 同上\n"
             "  custhub inventory [--json]                  所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连), 不连机器\n"
             "  custhub exec <目标> [--json] [--timeout 秒] -- 命令…   多台并行跑一条命令; 目标: 名字 / A-2,A-7 / @all @online @win @win7 @linux @mac\n"
+            "  custhub netcheck <名字>                     看别的机器的网络状况(只读; 要 info 或 sh 通行证)\n"
+            "  custhub log [名字] [--grep 关键字] [--lines 行数]   看日志(不给名字 = 本机; 别的机器要 info 或 sh 通行证)\n"
+            "  custhub watch [--json] [--notify]           持续看事件(上线、离线、版本、能力、直连); --notify 离线太久、版本卡住、能力变差时弹通知\n"
+            "  custhub wait <名字> <online|offline|reachable|direct|version 版本> [--timeout 秒]   等到条件成立(返回 0), 超时返回 4\n"
             "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"

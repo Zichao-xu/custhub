@@ -210,6 +210,20 @@ void *p_fopen(const char *path, const char *mode) { return fopen(path, mode); }
 int p_fseek64(void *f, int64_t off) { return fseeko((FILE *)f, (off_t)off, SEEK_SET) ? -1 : 0; }
 int64_t p_fsize(const char *path) { struct stat st; return !stat(path, &st) && S_ISREG(st.st_mode) ? (int64_t)st.st_size : -1; }
 int p_stderr_tty(void) { return isatty(2); }
+void p_notify(const char *title, const char *msg)
+{
+    char t[200], m[400], cmd[800]; size_t k = 0;   /* 去掉引号和反斜杠, 免得拼命令出问题 */
+    for (const char *c = title; *c && k < sizeof t - 1; c++) if (*c != '"' && *c != '\\' && *c != '\'' && *c != '`' && *c != '$') t[k++] = *c;
+    t[k] = 0; k = 0;
+    for (const char *c = msg; *c && k < sizeof m - 1; c++) if (*c != '"' && *c != '\\' && *c != '\'' && *c != '`' && *c != '$') m[k++] = *c;
+    m[k] = 0;
+#ifdef __APPLE__
+    snprintf(cmd, sizeof cmd, "osascript -e 'display notification \"%s\" with title \"%s\"' >/dev/null 2>&1", m, t);
+#else
+    snprintf(cmd, sizeof cmd, "command -v notify-send >/dev/null 2>&1 && notify-send '%s' '%s' >/dev/null 2>&1", t, m);
+#endif
+    if (system(cmd)) { /* 没有通知服务: 不影响 */ }
+}
 int p_isdir(const char *path) { struct stat st; return !stat(path, &st) && S_ISDIR(st.st_mode); }
 int p_remove(const char *path) { return remove(path); }
 char p_sep(void) { return '/'; }
