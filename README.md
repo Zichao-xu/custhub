@@ -33,6 +33,17 @@ Windows 在 Win+R / cmd / PowerShell 里粘贴运行（弹 UAC），Mac / Linux 
 
 它会下载本平台的程序（GitHub 连不上时自动走镜像），按发布清单核对 sha512，装进系统目录、注册成系统服务，然后向网里报到并显示**接入码**（形如 `R44-CQP`）。把接入码告诉管理员，批准后屏幕上显示"已接入"。装好后 `custhub` 命令已经在 PATH 里（Linux / macOS：`/usr/local/bin/custhub`，OpenWrt：`/usr/bin/custhub`，用户模式：`~/.local/bin`；Windows：安装目录加进系统 PATH）。跑接入的那个账号（用 sudo 时是 sudo 之前的账号）会加进本机的 `custhub` 用户组，重新登录后不用 sudo 就能 `custhub sh / connect / ls / pass`；别的账号用 `sudo custhub user add <账号>` 加（`user del` 移出，`user ls` 列出）。组里的账号经本机守护办事，碰不到节点钥匙；但能用本机的通行证开别的机器的 shell，只加可信的人。`join`、`remove`、`user`、`key` 要 root，不是 root 时自动换成 `sudo`（Windows 上提示用管理员终端）。
 
+### 一眼看全局、多台跑命令
+
+```sh
+custhub inventory [--json]                         # 所有机器: 系统、机型、版本、能力、本机到它怎么连(来自位置记录, 不连机器)
+custhub exec <目标> [--json] [--timeout 秒] -- 命令  # 并行跑; 目标: A-2 / A-2,A-7 / @all @online @win @win7 @linux @mac
+```
+
+`exec` 走现成的 sh 服务（要有 sh 通行证），对方机器不用新功能。输出去掉终端控制码；输出和退出码都一样的机器合成一组显示。`--json` 时每台一条：`name ok code ms truncated output error`。全部退出码为 0 才返回 0。Windows 上命令交给 `cmd.exe /c`，代码页已切成 UTF-8。不在终端里运行时（比如脚本、AI 调用），进度条不刷屏。
+
+给 AI 用的说明在 `skills/custhub/SKILL.md`（Claude Code 的 skill 格式，其他 AI 也能当说明书读）：先 `inventory --json` 看全局，用 `exec` 而不是往终端里灌按键，被拒时请人签通行证。
+
 ### 传文件
 
 ```sh
@@ -163,6 +174,7 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 | `net-test.sh` | 心跳测延迟、`custhub ping` / `netcheck`、网络变化马上重查重连 |
 | `decentral-test.sh` | 去中心化: 唯一的可达节点关掉后经不可达节点中转; 新机器向不可达节点报到 |
 | `file-test.sh` | 传文件: send / pull、放进目录、中文和空格路径、断了续传、内容核对、权限 |
+| `exec-test.sh` | inventory(文本 / JSON)、exec 多台并行、合并相同输出、退出码、--json、超时、不在线、没权限 |
 | `v6-test.sh` | 双栈: IPv4、IPv6 分开算可达; 两条链路热备, 优先 IPv6, 断了马上走 IPv4 |
 | `sh-test.sh` | shell：命令、退出码、大输出、交互、窗口大小、Ctrl-C、收尾 |
 | `upnp-test.sh` | UPnP 自动映射（假路由器） |

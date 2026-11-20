@@ -106,6 +106,10 @@ void ctl_io(int qi)
         if (resolve(a, ed)) { put_str(fd, "ERR 名单里没有这个节点\n"); p_close(fd); return; }
         ping_text(&o, ed); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return;
     }
+    if (f >= 2 && !strcmp(cmd, "TARGETS")) {             /* 目标表达式 → 名字列表(custhub exec 用) */
+        char out[2048]; put_str(fd, targets_resolve(q->line + 8, out, sizeof out) ? out : out); put_str(fd, "\n"); p_close(fd); return;
+    }
+    if (f >= 1 && !strcmp(cmd, "INV")) { buf_t o = { 0 }; inventory_text(&o, f >= 2 && !strcmp(a, "json")); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
     if (f >= 1 && !strcmp(cmd, "NETCHECK")) { buf_t o = { 0 }; netcheck_text(&o); put_all(fd, o.p, o.len); buf_free(&o); p_close(fd); return; }
     if (f >= 1 && !strcmp(cmd, "LINE")) {               /* 新机器的一行接入命令: 地址取网里一台可达、版本最新的机器(rel.c 的只读 HTTP) */
         char l[700]; join_line(l, sizeof l); put_str(fd, l); p_close(fd); return;
@@ -179,6 +183,101 @@ void join_line(char *out, size_t cap)
 }
 
 static const char *link_kind(const conn_t *c) { return c->udp ? "UDP" : c->fam == 6 ? "TCP IPv6" : "TCP IPv4"; }
+
+/* ---------- custhub inventory: 所有机器的基本信息, 来自位置记录(不连任何机器) ---------- */
+static void split_info(const char *mi, char f[4][100])
+{
+    char b[400]; snprintf(b, sizeof b, "%s", mi);
+    for (char *c = b; *c; c++) if (*c == '_') *c = ' ';
+    for (int k = 0; k < 4; k++) f[k][0] = 0;
+    char *p = b; for (int k = 0; k < 4 && p; k++) { char *bar = k < 3 ? strchr(p, '|') : NULL; if (bar) *bar = 0; snprintf(f[k], 100, "%s", p); p = bar ? bar + 1 : NULL; }
+}
+
+static const char *cap_of(int v4, int v6, int punch, int json)
+{
+    if (json) return v4 && v6 ? "dualstack" : v4 ? "public" : v6 ? "ipv6" : punch ? "p2p" : "relay";
+    return v4 && v6 ? "双栈" : v4 ? "公网" : v6 ? "IPv6" : punch ? "P2P" : "跳转";
+}
+
+/* 目标表达式: 逗号分开的名字或分组; 分组按机器自报的平台: @all @online @win @win7 @linux @mac(都不含本机)
+ * 返回 0 时 out = "A-2 A-7"; 失败返回 -1, out = "ERR 原因" */
+int targets_resolve(const char *expr, char *out, size_t cap)
+{
+    char e[1024]; snprintf(e, sizeof e, "%s", expr); out[0] = 0; size_t ol = 0; int n = 0;
+    uint8_t seen[MAXM][32];
+    char *sv = NULL;
+    for (char *t = m_tok(e, ",", &sv); t; t = m_tok(NULL, ",", &sv)) {
+        while (*t == ' ') t++;
+        if (!*t) continue;
+        int grp = t[0] == '@', hit = 0;
+        for (int i = 0; i < G.trust.n; i++) {
+            member_t *m = &G.trust.m[i];
+            if (!grp && strcmp(m->name, t)) continue;
+            if (grp) {
+                if (!memcmp(m->ed, G.id.ed, 32)) continue;
+                rec_t *r = rec_by_ed(m->ed);
+                int online = conn_by_peer(m->ed) >= 0 || (r && now_ms() - r->rx_ms < 150000);
+                const char *plat = r ? r->info : "";
+                if (!strcmp(t, "@all")) ;
+                else if (!strcmp(t, "@online")) { if (!online) continue; }
+                else if (!strcmp(t, "@win")) { if (strncmp(plat, "win", 3)) continue; }
+                else if (!strcmp(t, "@win7")) { if (strncmp(plat, "win7", 4)) continue; }
+                else if (!strcmp(t, "@linux")) { if (strncmp(plat, "linux", 5)) continue; }
+                else if (!strcmp(t, "@mac")) { if (strncmp(plat, "mac", 3)) continue; }
+                else { snprintf(out, cap, "ERR 不认识的分组 %s(有 @all @online @win @win7 @linux @mac)", t); return -1; }
+            }
+            hit = 1;
+            int dup = 0; for (int k = 0; k < n; k++) if (!memcmp(seen[k], m->ed, 32)) dup = 1;
+            if (dup || n >= MAXM) continue;
+            memcpy(seen[n++], m->ed, 32);
+            ol += (size_t)snprintf(out + ol, cap - ol, "%s%s", ol ? " " : "", m->name);
+        }
+        if (!hit && !grp) { snprintf(out, cap, "ERR 名单里没有 %s", t); return -1; }
+    }
+    if (!n) { snprintf(out, cap, "ERR 没有匹配的机器"); return -1; }
+    return 0;
+}
+
+void inventory_text(buf_t *o, int json)
+{
+    int64_t now = now_ms(); int first = 1;
+    if (json) add(o, "[");
+    else add(o, "%-8s %-4s %-18s %-30s %-9s %-5s %-30s %s\n", "名字", "状态", "机器名", "系统", "版本", "能力", "本机到它", "最近");
+    for (int t = 0; t < G.trust.n; t++) {
+        member_t *m = &G.trust.m[t];
+        int self = !memcmp(m->ed, G.id.ed, 32);
+        rec_t *r = self ? NULL : rec_by_ed(m->ed);
+        char f[4][100]; split_info(self ? my_info() : r ? r->info : "", f);
+        const char *ver = self ? CH_VERSION : r ? r->ver : "";
+        int c = self ? -1 : conn_by_peer(m->ed);
+        long age = r ? (long)((now - r->rx_ms) / 1000) : -1;
+        int online = self || c >= 0 || (r && age < 150);
+        int v4 = self ? G.r4 : r && r->relay && addr_fam(r->addr) == 4, v6 = self ? G.r6 : r && r->addr6[0] == '[';
+        int punch = self ? (G.punch[0] || G.upunch[0]) : r && (r->punch[0] || r->upunch[0]);
+        const char *addr = self ? (G.r4 ? relay_addr() : "") : r && r->relay ? r->addr : "";
+        char link[160] = "";
+        if (c >= 0) snprintf(link, sizeof link, "%s %s%s%dms", G.c[c].udp ? "UDP" : G.c[c].fam == 6 ? "TCP IPv6" : "TCP IPv4", G.c[c].addr, " ", G.c[c].rtt);
+        else if (!self && online) { int k = route(m->ed, NULL, 0); if (k >= 0) snprintf(link, sizeof link, "经 %s", name_of(G.c[k].peer)); }
+        if (json) {
+            add(o, "%s{\"name\":", first ? "" : ","); json_str(o, m->name);
+            add(o, ",\"self\":%s,\"online\":%s,\"version\":", self ? "true" : "false", online ? "true" : "false"); json_str(o, ver);
+            add(o, ",\"platform\":"); json_str(o, f[0]); add(o, ",\"host\":"); json_str(o, f[1][0] ? f[1] : m->host);
+            add(o, ",\"os\":"); json_str(o, f[2]); add(o, ",\"model\":"); json_str(o, f[3]);
+            add(o, ",\"capability\":\"%s\",\"addr\":", cap_of(v4, v6, punch, 1)); json_str(o, addr);
+            add(o, ",\"addr6\":"); json_str(o, self ? (G.r6 ? G.pub6 : "") : r && r->addr6[0] == '[' ? r->addr6 : "");
+            add(o, ",\"last_seen_s\":%ld,\"link\":", self ? 0L : age);
+            if (c >= 0) { add(o, "{\"kind\":\"%s\",\"addr\":", G.c[c].udp ? "udp" : G.c[c].fam == 6 ? "tcp6" : "tcp4"); json_str(o, G.c[c].addr); add(o, ",\"rtt_ms\":%d}", G.c[c].rtt); }
+            else if (link[0]) { add(o, "{\"kind\":\"relay\",\"via\":"); json_str(o, link + 4); add(o, "}"); }
+            else add(o, "null");
+            add(o, "}"); first = 0;
+        } else {
+            char ag[24]; if (self) snprintf(ag, sizeof ag, "-"); else if (age < 0) snprintf(ag, sizeof ag, "从没见过"); else snprintf(ag, sizeof ag, "%lds 前", age);
+            add(o, "%-8s %-4s %-18.18s %-30.30s %-9s %-5s %-30.30s %s\n", m->name, self ? "本机" : online ? "在线" : "离线", f[1][0] ? f[1] : m->host[0] ? m->host : "-",
+                f[2][0] ? f[2] : "-", ver[0] ? ver : "-", online || self ? cap_of(v4, v6, punch, 0) : "-", self ? "本机" : link[0] ? link : "-", ag);
+        }
+    }
+    if (json) add(o, "]\n");
+}
 
 void ping_text(buf_t *o, const uint8_t ed[32])
 {

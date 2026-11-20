@@ -169,7 +169,8 @@ typedef struct {
 extern g_t G;
 
 void log_open(const char *path);
-char *m_tok(char *s, const char *delim, char **save);   /* strtok_r(Win7 的 msvcrt 没有) */
+char *m_tok(char *s, const char *delim, char **save);
+void json_str(buf_t *o, const char *s);                 /* util.c: 追加一个 JSON 字符串(带引号、转义) */   /* strtok_r(Win7 的 msvcrt 没有) */
 int  cmd_mesh(int argc, char **argv);                    /* main.c: mesh 子命令入口 */
 int  cmd_passcheck(char **a);
 /* sshsig.c: ssh-keygen -Y sign 格式验签(只认给定公钥) → 1 通过 */
@@ -328,7 +329,10 @@ int  cmd_ls(const char *dir);
 int  cmd_ctl(const char *dir, const char *line);
 void ls_text(buf_t *o);
 void ping_text(buf_t *o, const uint8_t ed[32]);          /* custhub ping: 到对端的各条链路、延迟、现在走哪条 */
-void netcheck_text(buf_t *o);                            /* custhub netcheck: 本机网络状况 */
+void netcheck_text(buf_t *o);
+void inventory_text(buf_t *o, int json);
+int  targets_resolve(const char *expr, char *out, size_t cap);   /* app.c: 目标表达式 → 名字列表 */
+int  cmd_exec(int argc, char **argv);                    /* exec.c */                 /* custhub inventory: 所有机器的基本信息(位置记录里的, 不连机器) */                            /* custhub netcheck: 本机网络状况 */
 void punch_desc(char *tcp, char *udp, size_t cap);       /* punch.c: TCP / UDP 打洞查映射的结果说明 */
 void net_watch(void);
 void punch_reset(void);                                  /* punch.c: 网络变了, 马上重查映射、重新打洞 */

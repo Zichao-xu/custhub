@@ -209,6 +209,7 @@ int p_replace(const char *from, const char *to) { return rename(from, to) ? -1 :
 void *p_fopen(const char *path, const char *mode) { return fopen(path, mode); }
 int p_fseek64(void *f, int64_t off) { return fseeko((FILE *)f, (off_t)off, SEEK_SET) ? -1 : 0; }
 int64_t p_fsize(const char *path) { struct stat st; return !stat(path, &st) && S_ISREG(st.st_mode) ? (int64_t)st.st_size : -1; }
+int p_stderr_tty(void) { return isatty(2); }
 int p_isdir(const char *path) { struct stat st; return !stat(path, &st) && S_ISDIR(st.st_mode); }
 int p_remove(const char *path) { return remove(path); }
 char p_sep(void) { return '/'; }

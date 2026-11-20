@@ -33,7 +33,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull") || !strcmp(c, "inventory") || !strcmp(c, "exec")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -92,6 +92,11 @@ int cmd_mesh(int argc, char **argv)
         return 0;
     }
     if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");
+    if ((argc == 3 || argc == 4) && !strcmp(c, "inventory")) {   /* 所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连); --json 给脚本 / AI */
+        if (argc == 4 && strcmp(argv[3], "--json")) { fprintf(stderr, "用法: custhub inventory [--json]\n"); return 2; }
+        return cmd_ctl(argv[2], argc == 4 ? "INV json" : "INV");
+    }
+    if (argc >= 4 && !strcmp(c, "exec")) return cmd_exec(argc - 2, argv + 2);
     if (argc == 6 && !strcmp(c, "send")) return cmd_send(argv[2], argv[3], argv[4], argv[5]);   /* custhub send 本机文件 A-2 对方路径 */
     if (argc == 6 && !strcmp(c, "pull")) return cmd_pull(argv[2], argv[3], argv[4], argv[5]);   /* custhub pull 本机路径 A-2 对方文件 */
     if ((argc == 4 || argc == 5) && !strcmp(c, "bench")) {   /* 测速: 上传、下载各测几秒(默认 5), 走平常的流(同样的加密、额度、选路) */
@@ -163,6 +168,8 @@ int cmd_mesh(int argc, char **argv)
             "  custhub netcheck                           本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟\n"
             "  custhub send <本机文件> <名字> <对方路径>     发文件过去(对方路径是目录就放进去); 断了再执行一次会续传\n"
             "  custhub pull <本机路径> <名字> <对方文件>     把对方的文件拉过来(本机路径是目录就放进去); 同上\n"
+            "  custhub inventory [--json]                  所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连), 不连机器\n"
+            "  custhub exec <目标> [--json] [--timeout 秒] -- 命令…   多台并行跑一条命令; 目标: 名字 / A-2,A-7 / @all @online @win @win7 @linux @mac\n"
             "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"

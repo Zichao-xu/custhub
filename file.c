@@ -225,12 +225,13 @@ static int line_in(int fd, char *out, size_t cap)
 
 static void progress(int64_t done, int64_t total, int64_t t0, int fin)
 {
-    static int64_t last;
+    static int64_t last; static int tty = -1;
+    if (tty < 0) tty = p_stderr_tty();
     int64_t now = now_ms();
-    if (!fin && now - last < 500) return;
+    if (!fin && (!tty || now - last < 500)) return;      /* 不在终端里(脚本、AI 调用): 不刷进度, 只给最后一行 */
     last = now;
     double s = (now - t0) / 1000.0 + 0.001;
-    fprintf(stderr, "\r  %5.1f%%  %lld / %lld MB  %.2f MB/s   ", total ? done * 100.0 / total : 100.0, (long long)(done >> 20), (long long)(total >> 20), done / s / 1048576.0);
+    fprintf(stderr, "%s  %5.1f%%  %lld / %lld MB  %.2f MB/s   ", tty ? "\r" : "", total ? done * 100.0 / total : 100.0, (long long)(done >> 20), (long long)(total >> 20), done / s / 1048576.0);
     if (fin) fprintf(stderr, "\n");
 }
 
@@ -238,7 +239,7 @@ int cmd_send(const char *dir, const char *local, const char *who, const char *rp
 {
     int64_t size = p_fsize(local);
     if (size < 0) { fprintf(stderr, p_isdir(local) ? "%s 是目录(一次只传一个文件)\n" : "本机没有这个文件: %s\n", local); return 1; }
-    char hx[65]; fprintf(stderr, "  核对用的哈希…\r");
+    char hx[65]; if (p_stderr_tty()) fprintf(stderr, "  核对用的哈希…\r");
     if (hash_file(local, -1, NULL, hx)) { fprintf(stderr, "读不了 %s\n", local); return 1; }
     int fd = ctl_open(dir, who, "file");
     if (fd < 0) return 1;

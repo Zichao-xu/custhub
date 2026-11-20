@@ -141,3 +141,15 @@ void short_id(const uint8_t pub[32], char out[9])
 {
     for (int i = 0; i < 4; i++) snprintf(out + 2 * i, 3, "%02x", pub[i]);
 }
+
+void json_str(buf_t *o, const char *s)
+{
+    buf_add(o, "\"", 1);
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        char e[8]; const char *r = NULL;
+        if (*p == '"') r = "\\\""; else if (*p == '\\') r = "\\\\"; else if (*p == '\n') r = "\\n"; else if (*p == '\r') r = "\\r"; else if (*p == '\t') r = "\\t";
+        else if (*p < 0x20) { snprintf(e, sizeof e, "\\u%04x", *p); r = e; }
+        if (r) buf_add(o, r, strlen(r)); else buf_add(o, p, 1);
+    }
+    buf_add(o, "\"", 1);
+}
