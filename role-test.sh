@@ -115,6 +115,14 @@ wait_for 15 grep -q "可达: 对外地址 127.0.0.1:$PB(上次就可达, 免观�
 ok "b 重启: 上次就可达, 回连一通马上算可达(不再等观察期)" 'grep -q "可达: 对外地址 127.0.0.1:$PB(上次就可达, 免观察)" "$T/b.log"'
 wait_for 15 up adm b
 ok "adm 重启(名单里只有已关的 r 带地址): 靠地址簿连回 b" 'up adm b'
+kill -9 $(pgrep -f "$M run $T/adm") 2>/dev/null; sleep 1; rm -f "$T/adm/peers"
+mkdir -p "$T/web"; $M key --dir "$T/b" seed --github o/r --out "$T/web/custhub3.seed" 2>/dev/null
+ok "b 出的种子带上自己的可达地址" 'grep -q "^hint $B64B 127.0.0.1:$PB$" "$T/web/custhub3.seed"'
+PW=$((base+30)); (cd "$T/web" && exec python3 -m http.server $PW --bind 127.0.0.1) >/dev/null 2>&1 &
+sleep 0.5
+CUSTHUB_MESH_LONELY_S=2 CUSTHUB_REL_URL="http://127.0.0.1:$PW/" $M run "$T/adm" &
+wait_for 20 up adm b
+ok "地址簿没了、名单里的地址也连不上: 自己去发布源取种子, 连回 b" 'up adm b && grep -q "从发布的种子里拿到 [1-9]" "$T/adm.log"'
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail -eq 0 ] || { KEEP=1; tail -n 12 "$T"/*.log; }

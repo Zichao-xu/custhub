@@ -317,6 +317,44 @@ void disc_on_up(int i)
 
 static void clean(char *s) { for (; *s; s++) if (*s == ' ' || *s == ',' || *s == ':') *s = '_'; }
 
+/* 谁都连不上(地址簿空了 / 全过时, 名单也没地址: 比如离线很久、升级前后名单变了): 去发布源取种子, 读里面的可达地址(和更新的名单) */
+static void seed_import(const char *path)
+{
+    static char t[MAXTEXT + MAXM * 120 + 1024];
+    long n = m_read(path, t, sizeof t - 1);
+    if (n <= 0 || strncmp(t, "custhub-seed v1\n", 16)) return;
+    t[n] = 0;
+    char *tr = strstr(t, "\n--trust--\n");
+    if (!tr) return;
+    *tr = 0;
+    mtrust_apply(tr + 11, strlen(tr + 11), "发布的种子");
+    int got = 0;
+    for (char *h = strstr(t, "\nhint "); h; h = strstr(h + 1, "\nhint ")) {
+        char kb[64], ad[64]; uint8_t ed[32];
+        if (sscanf(h + 6, "%63s %63s", kb, ad) != 2 || b64_decode(kb, strlen(kb), ed, 32) != 32 || !member_by_ed(ed) || !memcmp(ed, G.id.ed, 32)) continue;
+        if (!hint_addr(ed) || strcmp(hint_addr(ed), ad)) { hint_note(ed, ad); got++; }
+    }
+    logf_("谁都连不上: 从发布的种子里拿到 %d 个新的可达地址", got);
+    if (got) { targets_sync(); for (int k = 0; k < G.nt; k++) if (G.t[k].conn < 0) { G.t[k].next_try = 0; G.t[k].backoff = 1000; } }
+}
+
+static void lonely_tick(int any_up, int64_t now)
+{
+    static int h = -1, k = 0; static int64_t next;
+    char path[300]; snprintf(path, sizeof path, "%s/seed.tmp", G.dir);
+    if (h >= 0) { int r = p_fetch_poll(h); if (r) { h = -1; if (r == 1) seed_import(path); remove(path); } return; }
+    long ls = atol(getenv("CUSTHUB_MESH_LONELY_S") ? getenv("CUSTHUB_MESH_LONELY_S") : "60");
+    if (any_up || now - G.last_up_ms < ls * 1000 || now < next) return;
+    char url[400]; const char *base = getenv("CUSTHUB_REL_URL");
+    if (!base && G.relbase[0]) base = G.relbase;
+    static const char *pre[] = { "", "https://ghfast.top/", "https://gh-proxy.com/" };
+    if (base) snprintf(url, sizeof url, "%scusthub3.seed", base);
+    else if (G.github[0]) snprintf(url, sizeof url, "%shttps://github.com/%s/releases/latest/download/custhub3.seed", pre[k++ % 3], G.github);
+    else return;
+    next = now + ls * 2000;
+    h = p_fetch_start(url, path);
+}
+
 void disc_tick(void)
 {
     int64_t now = now_ms();
@@ -330,6 +368,7 @@ void disc_tick(void)
         strncat(status, item, sizeof status - strlen(status) - 1);
     }
     if (any_up) G.last_up_ms = now;
+    lonely_tick(any_up, now);
     b64_encode(G.id.ed, 32, b64);
     snprintf(body, sizeof body, "%s %s %s %s %s|%s", G.me_relay ? "relay" : "node",
              G.me_relay ? relay_addr() : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info());
