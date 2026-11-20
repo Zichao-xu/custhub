@@ -242,7 +242,10 @@ static void draw(void)
         if (i < nrw) {
             row_t *r = &RW[i]; int on = online(r);
             if (r->self) snprintf(conn, sizeof conn, "本机%s", !my6[0] || strstr(my6, "没有 IPv6") ? "" : strstr(my6, ", 可达") ? "(IPv6 可达)" : strstr(my6, "已开启") ? "(IPv6 观察中)" : "(有 IPv6, 外面连不进来)");
-            else if (r->link) snprintf(conn, sizeof conn, "直连%s%s%s", r->link4 && r->link6 ? "(IPv4+IPv6)" : r->link6 ? "(IPv6)" : !r->link4 && r->linku ? "(UDP)" : "", r->relay ? " " : "", r->relay ? r->addr : "");
+            else if (r->link) {                          /* 写明协议: TCP(IPv4 / IPv6) 和 UDP 各有没有 */
+                const char *tcp = r->link4 && r->link6 ? "TCP(IPv4+IPv6)" : r->link6 ? "TCP(IPv6)" : r->link4 ? "TCP" : "";
+                snprintf(conn, sizeof conn, "直连 %s%s%s%s%s", tcp, tcp[0] && r->linku ? "+" : "", r->linku ? "UDP" : "", r->relay ? " " : "", r->relay ? r->addr : "");
+            }
             else if (r->rec && strcmp(r->via, "-")) snprintf(conn, sizeof conn, "经 %s", r->via);
             else snprintf(conn, sizeof conn, "%s", r->relay ? r->addr : "-");
             out(i == sel ? "\x1b[7m" : "");

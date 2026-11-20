@@ -49,7 +49,7 @@ static int u_new(uint32_t conv, const char *addr)
         ikcp_setoutput(k, k_out);
         ikcp_setmtu(k, UMTU);
         ikcp_wndsize(k, 512, 512);
-        ikcp_nodelay(k, 1, 10, 2, 1);                    /* 快速模式: 10ms 节拍、2 次重复 ACK 就重传、不做拥塞退让 */
+        ikcp_nodelay(k, 1, 20, 2, 1);                    /* 快速模式: 20ms 节拍(热备链路常驻, 不要太勤)、2 次重复 ACK 就重传、不做拥塞退让 */
         k->stream = 1;
         memset(&U[s], 0, sizeof U[s]);
         U[s].used = 1; U[s].k = k; U[s].conv = conv; U[s].conn = -1;

@@ -155,9 +155,6 @@ static void on_up(int i)
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 == i) { G.t[t].back6 = 1000; snprintf(G.t[t].why6, sizeof G.t[t].why6, "up"); }
     G.last_up_ms = now_ms();
     dedupe(i);
-    if (c->state == C_UP && !c->udp)                     /* TCP 是底座: 有了 TCP 直连, 同一对端的 UDP 链路就不用了 */
-        for (int j = 0; j < MAXC; j++) if (j != i && G.c[j].state != C_FREE && G.c[j].udp && !memcmp(G.c[j].peer, c->peer, 32)) conn_close(j, "已有 TCP 直连, 不用 UDP");
-    if (c->state == C_UP && c->udp && (conn_by_peer_fam(c->peer, 4) >= 0 || conn_by_peer_fam(c->peer, 6) >= 0)) { conn_close(i, "已有 TCP 直连, 不用 UDP"); return; }
     if (c->state == C_UP) disc_on_up(i);
 }
 
@@ -607,7 +604,7 @@ int mesh_run(const char *dir)
         sh_poll_add(p, &n, map);
         rel_poll_add(p, &n, map);
         pkg_poll_add(p, &n, map);
-        int r = p_poll(p, n, udp_active() ? 10 : 300);   /* 有 UDP 链路: KCP 要 10ms 的节拍 */
+        int r = p_poll(p, n, udp_active() ? 20 : 300);   /* 有 UDP 链路: KCP 要 20ms 的节拍 */
         if (r < 0) { logf_("poll: %s", p_strerr(p_lasterr())); return 1; }
         for (int k = 0; r > 0 && k < n; k++) {
             short rev = p[k].rev;

@@ -53,7 +53,8 @@ echo "== 2 同时拨: 不可达的两台打洞直连"
 wait_for 40 punched
 ok "x 和 y 之间有打洞的链路" 'punched'
 ok "x 连 y 的服务直接走, 不经 r" '[ "$(printf hi | $M connect "$T/x" y $ECHO 2>/dev/null)" = hi ] && grep -q "已连上 y port:$ECHO(经 y)" "$T/x.log"'
-ok "两边都只留一条打洞链路(公钥小的当发起方, 没有重复)" '[ "$($M ls "$T/x" | sed -n "/^链路/,/^位置/p" | grep -c "^  y ")" = 1 ] && [ "$($M ls "$T/y" | sed -n "/^链路/,/^位置/p" | grep -c "^  x ")" = 1 ]'
+ok "两边都只留一条 TCP 打洞链路(公钥小的当发起方, 没有重复)" '[ "$($M ls "$T/x" | sed -n "/^链路/,/^位置/p" | grep "^  y " | grep -vc " UDP ")" = 1 ] && [ "$($M ls "$T/y" | sed -n "/^链路/,/^位置/p" | grep "^  x " | grep -vc " UDP ")" = 1 ]'
+ok "同时还挂着一条 UDP(热备)" 'wait_for 30 sh -c "$M ls $T/x | sed -n \"/^链路/,/^位置/p\" | grep -q \"^  y  *UDP \""'
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail -eq 0 ] || { KEEP=1; tail -n 20 "$T"/*.log; }

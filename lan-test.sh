@@ -50,6 +50,7 @@ echo "== 2 不可达的两台靠端点直接连上"
 wait_for 20 lan_link
 ok "x 和 y 之间有直接的链路(局域网地址)" 'lan_link'
 ok "x 连 y 的服务直接走, 不经 r" '[ "$(printf hi | $M connect "$T/x" y $ECHO 2>/dev/null)" = hi ] && grep -q "已连上 y port:$ECHO(经 y)" "$T/x.log"'
+ok "同时还挂着一条 UDP(热备, 走局域网端点)" 'wait_for 30 sh -c "$M ls $T/x | sed -n \"/^链路/,/^位置/p\" | grep -q \"^  y  *UDP $LAN:\""'
 ok "经局域网连着的不替对方做回连测试(测出来是局域网地址)" '! grep -q "端口: 已开启: $LAN" "$T/x.log" "$T/y.log"'
 
 echo "== 3 只有一边报端点也够: y 不再报, 由 y 去连 x 报的端点"

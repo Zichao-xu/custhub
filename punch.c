@@ -114,18 +114,40 @@ static void ustun_tick(int64_t now)
     udl = now + 3000;
 }
 
-static void udp_punch(void)
+/* UDP 热备: 和每个在线成员都挂一条 UDP(平时流量走 TCP, TCP 断了马上走 UDP)
+ *   对方的 UDP 地址: 局域网端点 / 可达地址(和 TCP 同一个端口号) / UDP 打洞端点, 轮流试; 双方都可以拨, 重复的按公钥规则留一条
+ *   都在打洞时间窗里拨(打洞要双方同时); 拨不通的退避, 最长 5 分钟 */
+static struct { uint8_t ed[32]; int64_t next, back; int rr; } UB[MAXM]; static int nub;
+
+static void udp_links(int64_t now)
 {
-    char h[64]; int port;
+    static char mine[16][48]; static int nmine; static int64_t mine_at;
+    if (!mine_at || now - mine_at > 30000) { mine_at = now; nmine = p_local_ipv4s(mine, 16); }
+    char lh[64]; int lp = 0; hostport(G.lspec, lh, sizeof lh, &lp);
     for (int i = 0; i < G.nr; i++) {
-        rec_t *r = &G.r[i];
-        if (!r->upunch[0] || r->relay || !member_by_ed(r->ed) || !memcmp(r->ed, G.id.ed, 32)) continue;
-        if (conn_by_peer_fam(r->ed, 4) >= 0 || conn_by_peer_fam(r->ed, 6) >= 0 || conn_by_peer_fam(r->ed, 'u') >= 0) continue;   /* 已有直接的链路 */
-        if (hostport(r->upunch, h, sizeof h, &port) || priv(h)) continue;
+        rec_t *r = &G.r[i]; char h[64]; int port;
+        if (!member_by_ed(r->ed) || !memcmp(r->ed, G.id.ed, 32) || now - r->rx_ms > 120000) continue;
+        int b = 0; while (b < nub && memcmp(UB[b].ed, r->ed, 32)) b++;
+        if (b == nub) { if (nub >= MAXM) continue; memset(&UB[nub], 0, sizeof UB[0]); memcpy(UB[nub].ed, r->ed, 32); UB[nub].back = 15000; nub++; }
+        if (conn_by_peer_fam(r->ed, 'u') >= 0) { UB[b].back = 15000; UB[b].next = 0; continue; }
         int busy = 0; for (int k = 0; k < MAXC; k++) if (G.c[k].state != C_FREE && G.c[k].udp && !memcmp(G.c[k].peer, r->ed, 32)) busy = 1;
+        if (busy || now < UB[b].next) continue;
+        const char *cand[8]; int nc = 0;
+        char eb[200]; snprintf(eb, sizeof eb, "%s", r->eps); char *sv = NULL;
+        static char eps[4][64]; int ne = 0;
+        for (char *e = m_tok(eb, ",", &sv); e && ne < 4; e = m_tok(NULL, ",", &sv)) {
+            if (hostport(e, h, sizeof h, &port)) continue;
+            int own = 0; for (int k = 0; k < nmine; k++) if (!strcmp(mine[k], h) && port == lp) own = 1;
+            if (!own) { snprintf(eps[ne], sizeof eps[0], "%s", e); cand[nc++] = eps[ne++]; }
+        }
+        if (r->relay && addr_fam(r->addr) == 4 && strcmp(r->addr, "-")) cand[nc++] = r->addr;
+        if (r->upunch[0] && !hostport(r->upunch, h, sizeof h, &port) && !priv(h)) cand[nc++] = r->upunch;
+        if (!nc) continue;
+        const char *a = cand[UB[b].rr++ % nc];
         uint8_t m[33]; m[0] = 'P'; memcpy(m + 1, G.id.ed, 32);
-        udp_raw(r->upunch, m, sizeof m);                 /* 招呼: 给本机 NAT 开口子 */
-        if (!busy && memcmp(G.id.ed, r->ed, 32) < 0) udp_dial(r->ed, r->upunch);   /* 公钥小的一方开 KCP 会话(握手包本身也在打洞, KCP 会重传) */
+        udp_raw(a, m, sizeof m);                         /* 招呼: 给本机 NAT 开口子 */
+        udp_dial(r->ed, a);                              /* 握手包本身也在打洞, KCP 会重传; 双方都拨时重复的那条按公钥规则去掉 */
+        UB[b].next = now + UB[b].back; UB[b].back = UB[b].back < 300000 ? UB[b].back * 2 : 300000;
     }
 }
 
@@ -135,16 +157,14 @@ void punch_tick(void)
     char h[64]; int lp = 0;
     const char *e = getenv("CUSTHUB_PUNCH_PORT");
     G.punch_port = G.lfd >= 0 && !G.relay_off && !hostport(G.lspec, h, sizeof h, &lp) ? (e ? atoi(e) : lp + 10) : 0;
-    if (!G.punch_port || G.r4 || !member_by_ed(G.id.ed)) {   /* 可达的不用打洞 */
-        if (G.punch[0] || G.upunch[0]) { G.punch[0] = G.upunch[0] = 0; G.mypub_ms = 0; }
-        q_close(); return;
-    }
-    stun_tick(now);
-    ustun_tick(now);
+    if (!member_by_ed(G.id.ed)) return;
+    int punching = G.punch_port && !G.r4;                /* 可达的不用查映射、不用 TCP 打洞(UDP 热备照样挂) */
+    if (!punching) { if (G.punch[0] || G.upunch[0]) { G.punch[0] = G.upunch[0] = 0; G.mypub_ms = 0; } q_close(); }
+    else { stun_tick(now); ustun_tick(now); }
     if ((wall_ms() / 1000) % 15 >= 6) return;            /* 双方共用的时间窗 */
     static int64_t last; if (now - last < 1000) return; last = now;
-    if (G.upunch[0]) udp_punch();
-    if (!G.punch[0] || getenv("CUSTHUB_NO_TCP_PUNCH")) return;
+    if (G.ufd >= 0 && !getenv("CUSTHUB_NO_UDP")) udp_links(now);
+    if (!punching || !G.punch[0] || getenv("CUSTHUB_NO_TCP_PUNCH")) return;
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i]; int port;
         if (!r->punch[0] || r->relay || !member_by_ed(r->ed) || !memcmp(r->ed, G.id.ed, 32)) continue;   /* 对方可达的照常拨, 不用打洞 */
