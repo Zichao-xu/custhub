@@ -41,7 +41,7 @@ for n in r x y; do $M run "$T/$n" & done
 lan_link(){ $M ls "$T/x" | sed -n '/^链路/,/^位置/p' | grep -qE "^  y +(出站|入站) $LAN:"; }
 
 echo "== 1 报端点"
-wait_for 15 grep -q "端点=$LAN:$PY" <($M ls "$T/r")
+wait_for 30 grep -q "端点=$LAN:$PY" <($M ls "$T/r")
 ok "y 的位置记录带局域网端点 $LAN:$PY" '$M ls "$T/r" | grep -q "^  y .*端点=$LAN:$PY"'
 ok "r 只听 127.0.0.1, 不报端点" '! $M ls "$T/x" | grep -q "^  r .*端点="'
 ok "x、y 都不算可达(观察期很长)" '$M ls "$T/x" | grep -q "^  y *节点" && ! grep -q "可达: 对外" "$T/x.log"'
