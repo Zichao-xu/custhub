@@ -12,7 +12,7 @@
 #define MESH_VER  "0.0.1"            /* 网络层协议版本(握手里报); 程序版本是 CH_VERSION, 平台名 CH_PLAT, 都由构建时 -D 给 */
 #define MAXC      128            /* 链路 */
 #define MAXS      256            /* 流(转发两端各占一个) */
-#define MAXT      8              /* 本机要挂的可达节点 */
+#define MAXT      64             /* 本机要连的对端: 可达节点 + 报了局域网端点的成员 */
 #define MAXQ      16             /* 控制口上还没说要干什么的连接 */
 #define MAXM      128            /* 名单成员 */
 #define MAXR      128            /* 位置记录 */
@@ -65,7 +65,8 @@ typedef struct { uint8_t ed[32]; char addr[64], addr6[80]; } hint_t;   /* addr6:
 typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
     int relay; char addr[64], relays[160], status[320], ver[16], info[200];
-    char addr6[80];               /* "" = 没报 IPv6; "-" = 有 IPv6 出口但连不进来; "[…]:端口" = IPv6 可达 */   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
+    char addr6[80];               /* "" = 没报 IPv6; "-" = 有 IPv6 出口但连不进来; "[…]:端口" = IPv6 可达 */
+    char eps[200];                /* 自报的局域网端点 "10.0.0.5:8444,192.168.1.2:8444"(多端点: 别人都试一遍, 同一局域网的自然直连) */   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
     char line[800];
 } rec_t;
 
@@ -112,6 +113,7 @@ typedef struct {
     uint8_t ed[32]; char name[32], addr[64], alt[64], why[96];   /* addr: 可达节点自报(没有就是名单); alt: 名单里的线索(与 addr 不同时轮流试) */
     int conn, flip; int64_t next_try, backoff;
     char addr6[80], why6[96]; int conn6; int64_t next6, back6;   /* IPv6 那条(对方 IPv6 可达才有), 和 IPv4 那条同时挂着 */
+    char ep[4][64]; int nep, direct;  /* 对方报的局域网端点; direct = 对方不可达, 只试端点(退避放长) */
 } target_t;
 
 typedef struct { int fd, authed; char line[48 * 1024]; size_t n; int64_t born; } ctlq_t;   /* 一行令牌 + 一行命令(TRUSTPUT 带整份名单) */

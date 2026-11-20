@@ -219,7 +219,7 @@ int hint_import(const char *line) { hint_t h; if (hint_line(line, &h)) return 0;
 
 void targets_sync(void)
 {
-    target_t old[MAXT]; int no = G.nt;
+    static target_t old[MAXT]; int no = G.nt;
     memcpy(old, G.t, sizeof old);
     G.nt = 0;
     /* 候选 = 位置记录里声明了可达的成员 + 地址簿里有的(+ 名单里带地址的老写法); 挂之前自己连一次, 握手就是确认 */
@@ -228,18 +228,25 @@ void targets_sync(void)
         const char *ha = hint_addr(m->ed), *h6 = hint_addr6(m->ed);
         rec_t *r = rec_by_ed(m->ed);
         const char *a6 = r && r->addr6[0] == '[' ? r->addr6 : h6 ? h6 : "";   /* IPv6 可达地址: 记录里自报的先用 */
-        if ((!ed_relay(m->ed) && !ha && !a6[0]) || !memcmp(m->ed, G.id.ed, 32)) continue;
+        int has_ep = r && r->eps[0];                     /* 报了局域网端点的成员也连(多端点: 都试一遍, 通的留下) */
+        if ((!ed_relay(m->ed) && !ha && !a6[0] && !has_ep) || !memcmp(m->ed, G.id.ed, 32)) continue;
         target_t *t = &G.t[G.nt++];
         int found = 0;
         for (int k = 0; k < no; k++) if (!memcmp(old[k].ed, m->ed, 32)) { *t = old[k]; found = 1; break; }
         if (!found) { memset(t, 0, sizeof *t); memcpy(t->ed, m->ed, 32); t->conn = t->conn6 = -1; t->backoff = t->back6 = 1000; snprintf(t->why, sizeof t->why, "未连"); snprintf(t->why6, sizeof t->why6, "未连"); }
         snprintf(t->name, sizeof t->name, "%s", m->name);
+        t->direct = !ed_relay(m->ed) && !ha && !a6[0];
+        int nep = 0; char eb[200]; snprintf(eb, sizeof eb, "%s", has_ep ? r->eps : "");
+        char *esv = NULL;
+        for (char *e = m_tok(eb, ",", &esv); e && nep < 4; e = m_tok(NULL, ",", &esv)) if (addr_fam(e) == 4) snprintf(t->ep[nep++], sizeof t->ep[0], "%s", e);
+        if (nep != t->nep && t->conn < 0) { t->next_try = 0; t->backoff = 1000; }
+        t->nep = nep;
         if (strcmp(t->addr6, a6)) {
             if (found && a6[0]) logf_("%s IPv6 地址 %s", m->name, a6);
             snprintf(t->addr6, sizeof t->addr6, "%s", a6);
             if (t->conn6 < 0) { t->next6 = 0; t->back6 = 1000; }
         }
-        const char *addr = ha ? ha : m->addr;
+        const char *addr = ha ? ha : m->addr;              /* 不可达的成员 addr 为空, 只试端点 */
         if (r && r->relay && strcmp(r->addr, "-") && addr_fam(r->addr) == 4) addr = r->addr;   /* 可达节点自报的地址先试 */
         /* 自报的可能过时(可达节点又搬了、记录还在), 地址簿 / 老名单的也可能过时: 不同就轮流试 */
         const char *alt = ha && strcmp(addr, ha) ? ha : m->addr[0] && strcmp(addr, m->addr) ? m->addr : "";
@@ -305,8 +312,10 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
     char *bar = strchr(f[7], '|');                       /* 版本|平台|机器名|系统|机型: 老版本只认前面的版本号 */
     if (bar) {
         *bar = 0;
-        char *s6 = strstr(bar + 1, "|6=");                /* 机器信息后面跟 |6=<IPv6 地址 / -> */
+        char *s6 = strstr(bar + 1, "|6=");                /* 机器信息后面跟 |e=<局域网端点> |6=<IPv6 地址 / -> */
         if (s6) { *s6 = 0; snprintf(r->addr6, sizeof r->addr6, "%s", s6 + 3); }
+        char *se = strstr(bar + 1, "|e=");
+        if (se) { *se = 0; snprintf(r->eps, sizeof r->eps, "%s", se + 3); }
         snprintf(r->info, sizeof r->info, "%s", bar + 1);
     }
     snprintf(r->ver, sizeof r->ver, "%s", f[7]);
@@ -329,7 +338,7 @@ void disc_rec_in(int from, const char *line, size_t n)
     if (cur && r.seq <= cur->seq) return;
     int fresh = !cur;
     if (!cur) { if (G.nr >= MAXR) return; cur = &G.r[G.nr++]; }
-    int changed = fresh ? (r.relay || r.addr6[0] == '[') : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)) || strcmp(cur->addr6, r.addr6));   /* 可达声明有变 */
+    int changed = fresh ? (r.relay || r.addr6[0] == '[' || r.eps[0]) : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)) || strcmp(cur->addr6, r.addr6) || strcmp(cur->eps, r.eps));   /* 可达声明 / 端点有变 */
     r.rx_ms = now_ms();
     *cur = r;
     hint_note(r.ed, r.relay && addr_fam(r.addr) == 4 ? r.addr : NULL);   /* 地址簿跟着它自己的声明走: 重启 / 发种子用 */
@@ -411,8 +420,21 @@ void disc_tick(void)
     if (!v6_at || now - v6_at > 30000) { v6_at = now; has6 = G.announce6[0] || !local_ip6(v6, sizeof v6); }   /* 本机有没有 IPv6 出口, 半分钟看一次 */
     char six[96] = "";
     if (G.r6) snprintf(six, sizeof six, "|6=%s", G.pub6); else if (has6) snprintf(six, sizeof six, "|6=-");
-    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s", G.me_relay ? "relay" : "node",
-             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), six);
+    static char eps[200]; static int64_t ep_at;         /* 局域网端点: 本机各局域网 IPv4 + 监听端口(监听所有地址时), 半分钟看一次 */
+    if (!ep_at || now - ep_at > 30000) {
+        ep_at = now; eps[0] = 0;
+        char h[64]; int lp = 0;
+        if (G.lfd >= 0 && !G.relay_off && !hostport(G.lspec, h, sizeof h, &lp) && !strcmp(h, "0.0.0.0")) {
+            char ips[16][48]; int ni = p_local_ipv4s(ips, 16), ne = 0;
+            for (int k = 0; k < ni && ne < 4; k++) {
+                unsigned a, b, c, d;
+                if (sscanf(ips[k], "%u.%u.%u.%u", &a, &b, &c, &d) != 4 || !(a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168))) continue;
+                size_t l = strlen(eps); snprintf(eps + l, sizeof eps - l, "%s%s:%d", ne ? "," : "|e=", ips[k], lp); ne++;
+            }
+        }
+    }
+    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s", G.me_relay ? "relay" : "node",
+             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {
         uint64_t wall = (uint64_t)wall_ms();
         G.myseq = wall > G.myseq ? wall : G.myseq + 1;

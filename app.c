@@ -177,7 +177,8 @@ void ls_text(buf_t *o)
         int c = conn_by_peer(G.t[t].ed);
         int c4 = conn_by_peer_fam(G.t[t].ed, 4), c6 = conn_by_peer_fam(G.t[t].ed, 6);
         (void)c;
-        if (G.t[t].addr[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr, c4 >= 0 ? "通" : G.t[t].why);
+        const char *a4 = c4 >= 0 ? G.c[c4].addr : G.t[t].addr[0] ? G.t[t].addr : G.t[t].nep ? G.t[t].ep[0] : "";   /* 通了显示实际连上的那个地址 */
+        if (a4[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, a4, c4 >= 0 ? "通" : G.t[t].why);
         if (G.t[t].addr6[0]) add(o, "  %-10s %-22s %s\n", G.t[t].name, G.t[t].addr6, c6 >= 0 ? "通" : G.t[t].why6);
     }
     add(o, "链路:\n");
@@ -189,6 +190,7 @@ void ls_text(buf_t *o)
         rec_t *r = &G.r[i];
         add(o, "  %-10s %s 地址=%s 挂在=%s 状态=%s 机器=%s 版本=%s(%lds 前收到)%s%s\n", name_of(r->ed), r->relay ? "可达" : "节点",
             r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000), r->addr6[0] ? " IPv6=" : "", r->addr6);
+        if (r->eps[0]) { o->len--; add(o, " 端点=%s\n", r->eps); }
     }
 }
 

@@ -107,6 +107,8 @@ void qual_tick(void)
         for (int i = 0; i < MAXC; i++) {
             conn_t *c = &G.c[i];
             if (c->state != C_UP || c->closing || c->probe_for || c->probe_in || c->guest || (c->fam == 6 && !G.announce[0])) continue;
+            unsigned a = 0, b = 0;                         /* 经局域网地址连着的: 对方看到的是本机局域网地址, 测出来不算数 */
+            if (!G.announce[0] && sscanf(c->addr, "%u.%u", &a, &b) == 2 && (a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128))) continue;
             if (best < 0 || (c->peer_relay && !G.c[best].peer_relay)) best = i;
         }
         if (best < 0) return;

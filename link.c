@@ -364,10 +364,25 @@ static void dial(int t, int six)
         tg->next6 = now_ms() + tg->back6; tg->back6 = tg->back6 < 8000 ? tg->back6 * 2 : 8000;
         addr = tg->addr6;
     } else {
-        tg->next_try = now_ms() + tg->backoff;
-        tg->backoff = tg->backoff < 8000 ? tg->backoff * 2 : 8000;
-        addr = tg->alt[0] && (tg->flip++ & 1) ? tg->alt : tg->addr;
-        if (tg->alt[0]) tg->next_try = now_ms() + 1000;  /* 有两个候选时不退避太久 */
+        /* 多端点: 自报地址、地址簿 / 老名单、对方报的各局域网端点, 轮流试(跳过本机自己的地址), 通了就留下 */
+        const char *cand[8]; int nc = 0;
+        if (tg->addr[0]) cand[nc++] = tg->addr;
+        if (tg->alt[0]) cand[nc++] = tg->alt;
+        static char mine[16][48]; static int nmine; static int64_t mine_at;
+        if (!mine_at || now_ms() - mine_at > 30000) { mine_at = now_ms(); nmine = p_local_ipv4s(mine, 16); }
+        for (int k = 0; k < tg->nep && nc < 8; k++) {
+            char h[64]; int pp, own = 0;
+            if (hostport(tg->ep[k], h, sizeof h, &pp)) continue;
+            char lh[64]; int lp = 0;                        /* 本机自己的地址 + 本机监听端口 = 拨到自己, 跳过 */
+            if (!hostport(G.lspec, lh, sizeof lh, &lp)) for (int j = 0; j < nmine; j++) if (!strcmp(mine[j], h) && pp == lp) own = 1;
+            if (!own) cand[nc++] = tg->ep[k];
+        }
+        int cap = tg->direct ? 60000 : 8000;            /* 只有局域网端点的(多半不在同一局域网): 退避放长 */
+        if (!nc) { tg->next_try = now_ms() + cap; snprintf(why, wc, "没有能试的地址"); return; }
+        int round = tg->flip++ % nc;
+        addr = cand[round];
+        if (round + 1 < nc) tg->next_try = now_ms() + 1000;   /* 这一轮还有没试的: 一秒后试下一个 */
+        else { tg->next_try = now_ms() + tg->backoff; tg->backoff = tg->backoff < cap ? tg->backoff * 2 : cap; }
     }
     if (hostport(addr, host, sizeof host, &port)) { snprintf(why, wc, "地址不对: %s", addr); return; }
     int fd = p_dial(host, port, 1, why, wc);
@@ -428,7 +443,7 @@ static void tick(void)
         if (tg->addr6[0] && tg->conn6 < 0 && now >= tg->next6 && conn_by_peer_fam(tg->ed, 6) < 0) dial(t, 1);   /* IPv6 那条: 和 IPv4 同时挂(热备) */
         if (tg->conn >= 0 || now < tg->next_try) continue;
         if (conn_by_peer_fam(tg->ed, 4) >= 0) continue; /* 对方已经挂过来了 */
-        if (!tg->addr[0]) continue;                     /* 只有 IPv6 地址 */
+        if (!tg->addr[0] && !tg->alt[0] && !tg->nep) continue;   /* 只有 IPv6 地址 */
         dial(t, 0);
     }
     disc_tick();
