@@ -177,6 +177,33 @@ static int map_now(int in, char *why, size_t wcap)
 /* 每轮调一次: 到点就映射 / 续租; 结果在 G.upnp_port(0 = 没映射) */
 void upnp_reset(void) { U.next = 0; U.ctl_host[0] = 0; U.ext = 0; }
 
+static void del_map(int ext, const char *proto)
+{
+    static char body[1024], head[600], out[4096];
+    snprintf(body, sizeof body,
+        "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">"
+        "<s:Body><u:DeletePortMapping xmlns:u=\"%s\"><NewRemoteHost></NewRemoteHost><NewExternalPort>%d</NewExternalPort>"
+        "<NewProtocol>%s</NewProtocol></u:DeletePortMapping></s:Body></s:Envelope>\r\n", U.svc, ext, proto);
+    snprintf(head, sizeof head, "POST %s HTTP/1.0\r\nHost: %s:%d\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
+             "SOAPAction: \"%s#DeletePortMapping\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+             U.ctl_path, U.ctl_host, U.ctl_port, U.svc, (int)strlen(body));
+    http(U.ctl_host, U.ctl_port, head, body, out, sizeof out, 3000);
+}
+
+/* 路由器说映射着, 回连却不通(比如路由器防火墙重载把 miniupnpd 的转发规则清了, 登记还在): 删掉重申请, 逼它重新装规则; 最多 5 分钟一次 */
+void upnp_repair(void)
+{
+    static int64_t last;
+    int64_t now = now_ms();
+    if (!G.upnp_port || !U.ctl_host[0] || (last && now - last < 300000)) return;
+    last = now;
+    logf_("UPnP: 路由器说映射着(TCP %d), 回连却不通: 删掉重新申请", G.upnp_port);
+    del_map(G.upnp_port, "TCP"); del_map(G.upnp_port, "UDP");
+    U.next = 0;                                          /* 下一轮马上重新申请(还是同一个外部端口) */
+}
+
+
+
 void upnp_tick(void)
 {
     int64_t now = now_ms();

@@ -312,6 +312,7 @@ void netcheck_text(buf_t *o);                            /* custhub netcheck: �
 void punch_desc(char *tcp, char *udp, size_t cap);       /* punch.c: TCP / UDP 打洞查映射的结果说明 */
 void net_watch(void);
 void punch_reset(void);                                  /* punch.c: 网络变了, 马上重查映射、重新打洞 */
-void upnp_reset(void);                                   /* upnp.c: 网络变了, 重新找路由器、重新映射 */                                    /* link.c: 本机网络变了(地址变化)就马上重查重连 */
+void upnp_reset(void);
+void upnp_repair(void);                                  /* upnp.c: 映射着却回连不通: 删掉重申请 */                                   /* upnp.c: 网络变了, 重新找路由器、重新映射 */                                    /* link.c: 本机网络变了(地址变化)就马上重查重连 */
 
 #endif

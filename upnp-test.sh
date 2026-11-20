@@ -3,7 +3,8 @@
 #   假路由器: 回 SSDP、给描述文件、收 AddPortMapping, 映射成功就真的把外部端口转发到节点
 #   故意: 8444 被占(718) → 8445 只认永久映射(725) → 8445 永久映射成功
 #   1 映射成功: 回连走映射出去的端口, 端口显示"已开启(UPnP 自动映射)"; 按租期续
-#   2 没有路由器: 显示不通, 并提示跑命令的人怎么手动开
+#   2 路由器的转发规则没了(登记还在): 回连不通就删掉重新申请
+#   3 没有路由器: 显示不通, 并提示跑命令的人怎么手动开
 set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
@@ -26,7 +27,13 @@ def udp():
         if b"M-SEARCH" in d:
             s.sendto(("HTTP/1.1 200 OK\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\nLOCATION: http://127.0.0.1:%d/desc.xml\r\n\r\n" % hp).encode(), a)
 threading.Thread(target=udp, daemon=True).start()
-fwd = {}
+fwd = {}; leases = set()                            # 像 miniupnpd: 登记(leases)和转发规则(fwd)分开; 已登记的续租只续登记
+def unforward(ext):
+    l = fwd.pop(ext, None)
+    if l:
+        try: l.shutdown(socket.SHUT_RDWR)                # 先唤醒卡在 accept 里的线程, 端口才放得出来
+        except OSError: pass
+        l.close()
 def forward(ext, inner):
     if ext in fwd: return
     l = socket.socket(); l.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); l.bind(("127.0.0.1", ext)); l.listen(8); fwd[ext] = l
@@ -42,7 +49,8 @@ def forward(ext, inner):
             except OSError: pass
     def acc():
         while True:
-            c, _ = l.accept()
+            try: c, _ = l.accept()
+            except OSError: return
             u = socket.create_connection(("127.0.0.1", inner))
             threading.Thread(target=pipe, args=(c, u), daemon=True).start()
             threading.Thread(target=pipe, args=(u, c), daemon=True).start()
@@ -54,14 +62,25 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def out(self, code, body):
         b = body.encode(); self.send_response(code); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
-    def do_GET(self): self.out(200, DESC)
+    def do_GET(self):
+        if self.path == "/drop":                       # 模拟路由器防火墙重载: 转发规则没了, 登记还在
+            for e in list(fwd): unforward(e)
+            say("drop"); return self.out(200, "ok")
+        self.out(200, DESC)
     def do_POST(self):
         x = self.rfile.read(int(self.headers["Content-Length"])).decode()
         g = lambda t: re.search("<%s>(.*?)</%s>" % (t, t), x).group(1)
+        if "DeletePortMapping" in x:
+            e = int(g("NewExternalPort")); leases.discard((e, g("NewProtocol")))
+            if g("NewProtocol") == "TCP": unforward(e)
+            say("del", e, g("NewProtocol")); return self.out(200, "<ok/>")
         ext, inner, lease, cli = int(g("NewExternalPort")), int(g("NewInternalPort")), int(g("NewLeaseDuration")), g("NewInternalClient")
         if ext == 8444: say("map", ext, inner, lease, cli, "-> 718"); return self.out(500, fault(718))
         if lease != 0: say("map", ext, inner, lease, cli, "-> 725"); return self.out(500, fault(725))
-        say("map", ext, inner, lease, cli, "-> ok"); forward(ext, inner); self.out(200, "<ok/>")
+        proto = g("NewProtocol")
+        say("map", ext, inner, lease, cli, "-> ok")
+        if proto == "TCP" and (ext, proto) not in leases: forward(ext, inner)   # 新登记才装转发; 续租不动
+        leases.add((ext, proto)); self.out(200, "<ok/>")
 http.server.ThreadingHTTPServer(("127.0.0.1", hp), H).serve_forever()
 PY
 sleep 0.5
@@ -75,7 +94,7 @@ i=0; for n in r d n; do i=$((i+1))
 done
 echo "upnp off" >>"$T/r/conf"; echo "listen 127.0.0.1:$PD" >>"$T/d/conf"; printf 'listen 127.0.0.1:%s\nannounce 127.0.0.1:1\n' $PN >>"$T/n/conf"   # 同一台机器上本来就连得到: 报一个连不进来的地址, 才测得到"不通"
 $M run "$T/r" 2>/dev/null &
-CUSTHUB_UPNP_SSDP=127.0.0.1:$SSDP CUSTHUB_UPNP_RENEW_S=3 CUSTHUB_MESH_PROBE_S=2 $M run "$T/d" 2>/dev/null &
+CUSTHUB_UPNP_SSDP=127.0.0.1:$SSDP CUSTHUB_UPNP_RENEW_S=3 CUSTHUB_MESH_PROBE_S=2 CUSTHUB_MESH_PROBE_RETRY_S=2 $M run "$T/d" 2>/dev/null &
 CUSTHUB_UPNP_SSDP=127.0.0.1:1 CUSTHUB_MESH_PROBE_RETRY_S=2 $M run "$T/n" 2>/dev/null &      # 没有路由器
 
 echo "== 1 有 UPnP 的路由器"
@@ -88,7 +107,15 @@ echo "$o" | grep -q "已开启(UPnP 自动映射): 127.0.0.1:8445" && ok "回连
 sleep 4
 [ "$(grep -c "map 8445 $PD 0 .* -> ok" "$T/router.log")" -ge 2 ] && ok "按租期续了映射" || ng "没续租: $(grep -c ok "$T/router.log")"
 
-echo "== 2 没有路由器"
+echo "== 2 路由器的转发规则没了(防火墙重载): 删掉重新申请"
+n0=$(grep -c "map 8445 $PD 0 .* -> ok" "$T/router.log")
+curl -s "http://127.0.0.1:$HTTP/drop" >/dev/null
+wait_for 20 grep -q "UPnP: 路由器说映射着(TCP 8445), 回连却不通: 删掉重新申请" "$T/d.log"
+grep -q "UPnP: 路由器说映射着(TCP 8445), 回连却不通: 删掉重新申请" "$T/d.log" && grep -q "^del 8445 TCP" "$T/router.log" && ok "回连不通: 先删掉映射" || ng "没删: $(tail -3 "$T/router.log"; grep UPnP "$T/d.log" | tail -2)"
+wait_for 20 sh -c "[ \$(grep -c 'map 8445 $PD 0 .* -> ok' $T/router.log) -gt $n0 ] && $M ls $T/d | grep -q '已开启(UPnP 自动映射)'"
+$M ls "$T/d" | grep -q "已开启(UPnP 自动映射): 127.0.0.1:8445" && ok "重新申请后转发规则回来了, 又连得进来" || ng "没恢复: $($M ls "$T/d" | grep 端口)"
+
+echo "== 3 没有路由器"
 wait_for 15 sh -c "$M ls $T/n | grep -q '不通'"
 grep -q "UPnP: 没映射上(局域网里没找到支持 UPnP 的路由器)" "$T/n.log" && ok "找不到路由器: 日志说明原因" || ng "n 日志: $(grep UPnP "$T/n.log")"
 o=$($M ls "$T/n" | grep "端口")

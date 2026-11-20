@@ -92,6 +92,7 @@ void qual_tick(void)
             G.ok_since = 0; obs_save(0); G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
             port_state("不通: 测试没回音%s%s", "", "");
             set_relay(0, "回连测试没回音");
+            upnp_repair();
         }
     }
     if (G.ok6_since && !G.r6 && (seeded6() || now - G.ok6_since >= env_s("CUSTHUB_MESH_OBS_S", 300)))
@@ -197,6 +198,7 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
         }
         port_state("不通: %s%s", t[0] == 'n' && t[1] == 'o' && t[2] == ' ' ? t + 3 : t, hint);
         set_relay(0, "回连测试不通");
+        upnp_repair();
     }
 }
 
