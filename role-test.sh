@@ -124,6 +124,14 @@ CUSTHUB_MESH_LONELY_S=2 CUSTHUB_REL_URL="http://127.0.0.1:$PW/" $M run "$T/adm" 
 wait_for 20 up adm b
 ok "地址簿没了、名单里的地址也连不上: 自己去发布源取种子, 连回 b" 'up adm b && grep -q "从发布的种子里拿到 [1-9]" "$T/adm.log"'
 
+echo "== 7 观察期中重启: 接着算, 不从头来"
+kill -9 $(pgrep -f "$M run $T/b") 2>/dev/null; sleep 1
+rm -f "$T/b/peers"; echo 15000 >"$T/b/obs"; : >"$T/b.log"   # 当它没算过可达、已观察 15 秒
+CUSTHUB_MESH_OBS_S=20 $M run "$T/b" &
+wait_for 20 grep -q "可达: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"
+ok "重启后接着算: 已观察 15 秒, 再过 5 秒就算可达" 'grep -q "观察期接着算: 已观察 15 秒" "$T/b.log" && grep -q "可达: 对外地址 127.0.0.1:$PB(过了观察期)" "$T/b.log"'
+ok "算可达后观察期进度删掉" '[ ! -e "$T/b/obs" ]'
+
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail -eq 0 ] || { KEEP=1; tail -n 12 "$T"/*.log; }
 [ $fail -eq 0 ]

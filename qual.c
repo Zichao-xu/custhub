@@ -25,6 +25,24 @@ static int seeded(void)
 
 int me_seed(void) { return seeded(); }
 
+/* 观察期进度存 <目录>/obs(已观察的毫秒数): 观察期中重启(比如升级)接着算, 不从头来; 一测不通或已算可达就删 */
+static int64_t obs_wrote;
+static int64_t obs_saved(void)
+{
+    char p[300], t[32]; snprintf(p, sizeof p, "%s/obs", G.dir);
+    long n = m_read(p, t, sizeof t - 1);
+    if (n <= 0) return 0;
+    t[n] = 0; long long v = atoll(t);
+    return v > 0 ? (int64_t)v : 0;
+}
+static void obs_save(int64_t ms)
+{
+    char p[300], t[32]; snprintf(p, sizeof p, "%s/obs", G.dir);
+    if (ms <= 0) { remove(p); return; }
+    int n = snprintf(t, sizeof t, "%lld\n", (long long)ms);
+    m_write(p, t, (size_t)n);
+}
+
 static void port_state(const char *fmt, const char *a, const char *b)   /* 端口检测结果, 有变化才写日志 */
 {
     char t[sizeof G.port_state];
@@ -50,12 +68,15 @@ void qual_tick(void)
     if (G.relay_off) { snprintf(G.port_state, sizeof G.port_state, "本机设了 relay off(不对外)"); set_relay(0, "本机设了 relay off"); return; }
     if (G.lfd < 0) { port_state("没在监听%s%s", "", ""); set_relay(0, "没在监听"); return; }
     if (G.probing && now > G.probe_deadline) {
-        G.probing = 0; G.ok_since = 0; G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
+        G.probing = 0; G.ok_since = 0; obs_save(0); G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
         port_state("不通: 测试没回音%s%s", "", "");
         set_relay(0, "回连测试没回音");
     }
-    if (G.ok_since && !G.me_relay && (seeded() || now - G.ok_since >= env_s("CUSTHUB_MESH_OBS_S", 1800)))
+    if (G.ok_since && !G.me_relay && (seeded() || now - G.ok_since >= env_s("CUSTHUB_MESH_OBS_S", 1800))) {
         set_relay(1, seeded() ? "上次就可达, 免观察" : "过了观察期");
+        obs_save(0);
+    }
+    if (G.ok_since && !G.me_relay && now - obs_wrote >= 5000) { obs_wrote = now; obs_save(now - G.ok_since); }
     upnp_tick();                                       /* 路由器自动映射 / 续租(到点才真做) */
     if (G.probing || now < G.probe_next) return;
     int best = -1;                                     /* 找一个连着的成员替本机测, 可达节点优先 */
@@ -81,14 +102,18 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
     int64_t now = now_ms();
     G.probing = 0;
     if (!strncmp(t, "ok ", 3)) {
-        if (!G.ok_since) G.ok_since = now;
+        if (!G.ok_since) {
+            int64_t had = G.me_relay ? 0 : obs_saved();  /* 观察期中重启过: 接着算 */
+            G.ok_since = now - had;
+            if (had) logf_("观察期接着算: 已观察 %lld 秒", (long long)(had / 1000));
+        }
         if (!G.announce[0]) snprintf(G.pub_addr, sizeof G.pub_addr, "%s", t + 3);
         if (G.me_relay) hint_note(G.id.ed, relay_addr());   /* 地址变了跟着记 */
         G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_S", 600);
         port_state(G.upnp_port ? "已开启(UPnP 自动映射): %s 从外面连得进来%s" : "已开启: %s 从外面连得进来%s",
                    relay_addr(), G.me_relay ? ", 可达" : seeded() ? "" : ", 观察期中");
     } else {
-        G.ok_since = 0;
+        G.ok_since = 0; obs_save(0);
         G.probe_next = now + env_s("CUSTHUB_MESH_PROBE_RETRY_S", 60);
         char hint[200] = "", host[64], ip[48] = ""; int port = 0;
         if (!hostport(G.lspec, host, sizeof host, &port)) {   /* 告诉跑命令的人怎么手动开(可选) */
