@@ -633,6 +633,22 @@ long p_udp_recv(int fd, void *b, size_t cap)
     return would(WSAGetLastError()) ? P_AGAIN : P_FAIL;
 }
 
+int p_local_ipv4s(char (*out)[48], int max)
+{
+    char hn[256]; struct addrinfo h, *ai = NULL; int n = 0;
+    if (gethostname(hn, sizeof hn)) return 0;
+    memset(&h, 0, sizeof h); h.ai_family = AF_INET;
+    if (getaddrinfo(hn, NULL, &h, &ai)) return 0;
+    for (struct addrinfo *i = ai; i && n < max; i = i->ai_next) {
+        struct sockaddr_in *a = (struct sockaddr_in *)i->ai_addr;
+        unsigned char *b = (unsigned char *)&a->sin_addr;
+        if (b[0] == 127) continue;
+        snprintf(out[n++], 48, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+    }
+    freeaddrinfo(ai);
+    return n;
+}
+
 int p_local_ip(const char *peer_host, char *out, size_t cap)
 {
     struct sockaddr_in a; int l = sizeof a;

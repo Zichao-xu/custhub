@@ -27,6 +27,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
@@ -146,6 +147,15 @@ void p_open_firewall(int port)
     snprintf(cmd, sizeof cmd, "command -v iptables >/dev/null 2>&1 && { iptables -C INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null"
              " || iptables -I INPUT 1 -p tcp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
     if (system(cmd)) { /* 没有 iptables 或没权限: 不影响 */ }
+    /* OpenWrt fw4(nftables): iptables 那条进不了 fw4 的 input_wan, WAN 进来的照样被拒; 写一条 uci 规则(重载后还在) + 当场插进去 */
+    char fw[1400];
+    snprintf(fw, sizeof fw, "[ -x /sbin/fw4 ] && command -v uci >/dev/null 2>&1 && command -v nft >/dev/null 2>&1 && {"
+             " [ \"$(uci -q get firewall.custhub.dest_port)\" = %d ] || { uci -q delete firewall.custhub; uci set firewall.custhub=rule;"
+             " uci set firewall.custhub.name=custhub; uci set firewall.custhub.src=wan; uci set firewall.custhub.proto=tcp;"
+             " uci set firewall.custhub.dest_port=%d; uci set firewall.custhub.target=ACCEPT; uci commit firewall; };"
+             " nft list chain inet fw4 input_wan | grep -q 'tcp dport %d .*accept' || nft insert rule inet fw4 input_wan tcp dport %d counter accept comment custhub; } >/dev/null 2>&1",
+             port, port, port, port);
+    if (system(fw)) { /* 不是 fw4 的 OpenWrt: 不影响 */ }
 #else
     (void)port;
 #endif
@@ -404,6 +414,20 @@ int p_local_ip(const char *peer_host, char *out, size_t cap)
         getsockname(fd, (struct sockaddr *)&a, &l) || !inet_ntop(AF_INET, &a.sin_addr, out, (socklen_t)cap)) { close(fd); return -1; }
     close(fd);
     return 0;
+}
+
+int p_local_ipv4s(char (*out)[48], int max)
+{
+    struct ifaddrs *ia = NULL; int n = 0;
+    if (getifaddrs(&ia)) return 0;
+    for (struct ifaddrs *i = ia; i && n < max; i = i->ifa_next) {
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+        struct sockaddr_in *a = (struct sockaddr_in *)i->ifa_addr;
+        if ((ntohl(a->sin_addr.s_addr) >> 24) == 127) continue;
+        if (inet_ntop(AF_INET, &a->sin_addr, out[n], 48)) n++;
+    }
+    freeifaddrs(ia);
+    return n;
 }
 
 /* ---------- 自升级 ---------- */

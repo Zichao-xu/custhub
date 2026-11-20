@@ -88,6 +88,17 @@ static int discover(char *why, size_t wcap)
     for (int i = 0; i < 3; i++) {
         char m[300]; int n = snprintf(m, sizeof m, "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: %s\r\n\r\n", st[i]);
         p_udp_sendto(fd, tgt, tport, m, (size_t)n);
+        /* 多播走默认路由: 默认路由是代理的虚拟网卡(utun / TUN)时到不了局域网 → 对每个局域网网段的 .1 和本机自己再单发一次
+         * (本机就是路由器时, 自己的 miniupnpd 也这样找到, 端口统一由它分配, 同一局域网不会撞) */
+        char ips[16][48]; int ni = e ? 0 : p_local_ipv4s(ips, 16);
+        for (int k = 0; k < ni; k++) {
+            unsigned a, b2, c, d;
+            if (sscanf(ips[k], "%u.%u.%u.%u", &a, &b2, &c, &d) != 4) continue;
+            if (!(a == 10 || (a == 172 && b2 >= 16 && b2 < 32) || (a == 192 && b2 == 168))) continue;
+            char gw[48]; snprintf(gw, sizeof gw, "%u.%u.%u.1", a, b2, c);
+            p_udp_sendto(fd, gw, 1900, m, (size_t)n);
+            if (strcmp(gw, ips[k])) p_udp_sendto(fd, ips[k], 1900, m, (size_t)n);
+        }
     }
     char loc[300] = "", b[2048];
     int64_t end = now_ms() + 2500;

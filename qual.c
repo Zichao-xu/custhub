@@ -118,7 +118,10 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
         char hint[200] = "", host[64], ip[48] = ""; int port = 0;
         if (!hostport(G.lspec, host, sizeof host, &port)) {   /* 告诉跑命令的人怎么手动开(可选) */
             if (upnp_lan_ip()[0]) snprintf(ip, sizeof ip, "%s", upnp_lan_ip()); else if (p_local_ip("8.8.8.8", ip, sizeof ip)) snprintf(ip, sizeof ip, "本机");
-            snprintf(hint, sizeof hint, "; 想让这台机器帮忙转发, 请在路由器上把 TCP %d 映射到 %s:%d(可选, 不开也能接入)", port, ip, port);
+            unsigned a = 0, b = 0; sscanf(ip, "%u.%u", &a, &b);
+            int lan = a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128) || ip[0] < '0' || ip[0] > '9';
+            if (lan) snprintf(hint, sizeof hint, "; 想让这台机器帮忙转发, 请在路由器上把 TCP %d 映射到 %s:%d(可选, 不开也能接入)", port, ip, port);
+            else snprintf(hint, sizeof hint, "; 本机就有公网地址 %s, 请检查本机防火墙是否放行 TCP %d(可选, 不开也能接入)", ip, port);
         }
         port_state("不通: %s%s", t[0] == 'n' && t[1] == 'o' && t[2] == ' ' ? t + 3 : t, hint);
         set_relay(0, "回连测试不通");
