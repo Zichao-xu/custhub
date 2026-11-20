@@ -47,15 +47,16 @@ int conn_by_peer_fam(const uint8_t ed[32], int fam)
 {
     int best = -1;
     for (int i = 0; i < MAXC; i++)
-        if (G.c[i].state == C_UP && !memcmp(G.c[i].peer, ed, 32) && (!fam || G.c[i].fam == fam) && (best < 0 || G.c[i].born > G.c[best].born)) best = i;
+        if (G.c[i].state == C_UP && !memcmp(G.c[i].peer, ed, 32) && (fam == 'u' ? G.c[i].udp != 0 : !G.c[i].udp && (!fam || G.c[i].fam == fam)) && (best < 0 || G.c[i].born > G.c[best].born)) best = i;
     return best;
 }
 
 /* 双栈热备: 两种都通时新流量走 IPv6, IPv6 断了马上落到 IPv4(已在跑的流留在原链路上) */
 int conn_by_peer(const uint8_t ed[32])
 {
-    int k = conn_by_peer_fam(ed, 6);
-    return k >= 0 ? k : conn_by_peer_fam(ed, 4);
+    int k = conn_by_peer_fam(ed, 6);                     /* TCP 是底座: IPv6 > IPv4 > UDP */
+    if (k < 0) k = conn_by_peer_fam(ed, 4);
+    return k >= 0 ? k : conn_by_peer_fam(ed, 'u');
 }
 
 uint32_t conn_new_sid(int i) { uint32_t s = G.c[i].next_sid; G.c[i].next_sid += 2; return s; }
@@ -108,7 +109,8 @@ void conn_close(int i, const char *why)
     int was_up = c->state == C_UP;
     c->state = C_FREE;
     if (was_up) hop_conn_down(i);
-    p_close(c->fd);
+    if (c->fd >= 0) p_close(c->fd);
+    if (c->udp) { udp_free(c->udp - 1); c->udp = 0; }
     buf_free(&c->in); buf_free(&c->out);
     memset(&c->hs, 0, sizeof c->hs); memset(&c->tx, 0, sizeof c->tx); memset(&c->rx, 0, sizeof c->rx);
 }
@@ -127,7 +129,7 @@ static void dedupe(int i)
 {
     conn_t *c = &G.c[i];
     for (int j = 0; j < MAXC; j++) {
-        if (j == i || G.c[j].state != C_UP || memcmp(G.c[j].peer, c->peer, 32) || G.c[j].fam != c->fam) continue;   /* v4、v6 各留一条 */
+        if (j == i || G.c[j].state != C_UP || memcmp(G.c[j].peer, c->peer, 32) || G.c[j].fam != c->fam || !G.c[j].udp != !c->udp) continue;   /* v4、v6、UDP 各留一条 */
         int drop = j;
         if (c->initiator != G.c[j].initiator) {        /* 双方各拨了一条: 两边按同一规则留, 不看当不算可达(否则两边各删一条, 反复重连) */
             int me_small = memcmp(G.id.ed, c->peer, 32) < 0;
@@ -148,11 +150,14 @@ static void on_up(int i)
         if (G.relay_off || G.lfd < 0) conn_send(i, F_PROBE, 0, "-", 1);   /* 本机不算可达: 告诉可达节点不用等回连测试请求 */
         return;
     }
-    logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->punch ? "打洞" : c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
+    logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->udp ? "UDP" : c->punch ? "打洞" : c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn == i) { G.t[t].backoff = 1000; snprintf(G.t[t].why, sizeof G.t[t].why, "up"); }
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 == i) { G.t[t].back6 = 1000; snprintf(G.t[t].why6, sizeof G.t[t].why6, "up"); }
     G.last_up_ms = now_ms();
     dedupe(i);
+    if (c->state == C_UP && !c->udp)                     /* TCP 是底座: 有了 TCP 直连, 同一对端的 UDP 链路就不用了 */
+        for (int j = 0; j < MAXC; j++) if (j != i && G.c[j].state != C_FREE && G.c[j].udp && !memcmp(G.c[j].peer, c->peer, 32)) conn_close(j, "已有 TCP 直连, 不用 UDP");
+    if (c->state == C_UP && c->udp && (conn_by_peer_fam(c->peer, 4) >= 0 || conn_by_peer_fam(c->peer, 6) >= 0)) { conn_close(i, "已有 TCP 直连, 不用 UDP"); return; }
     if (c->state == C_UP) disc_on_up(i);
 }
 
@@ -304,9 +309,15 @@ static void conn_read(int i)
     if (r == 0) { conn_close(i, "对方关闭"); return; }
     if (r == P_AGAIN) return;
     if (r < 0) { conn_close(i, p_strerr(p_lasterr())); return; }
+    conn_feed(i, tmp, (size_t)r);
+}
+
+void conn_feed(int i, const uint8_t *tmp, size_t r)
+{
+    conn_t *c = &G.c[i];
     c->last_rx = now_ms();
-    if (buf_add(&c->in, tmp, (size_t)r)) { conn_close(i, "内存不足"); return; }
-    if (c->state == C_HS && !c->initiator && c->in.len >= 4 && !memcmp(c->in.p, "GET ", 4)) {   /* 普通 HTTP 下载(rel.c): 握手第一条的长度头不会是 "GE" */
+    if (buf_add(&c->in, tmp, r)) { conn_close(i, "内存不足"); return; }
+    if (c->state == C_HS && !c->initiator && !c->udp && c->in.len >= 4 && !memcmp(c->in.p, "GET ", 4)) {   /* 普通 HTTP 下载(rel.c): 握手第一条的长度头不会是 "GE" */
         if (c->in.len > 4096) { conn_close(i, "HTTP 请求太长"); return; }
         if (!memmem_(c->in.p, c->in.len, "\r\n\r\n", 4) && !memmem_(c->in.p, c->in.len, "\n\n", 2)) return;   /* 等请求头收齐 */
         static char rq[4097]; size_t rn = c->in.len; memcpy(rq, c->in.p, rn); rq[rn] = 0;
@@ -329,7 +340,7 @@ static void conn_write(int i)
 {
     conn_t *c = &G.c[i];
     if (c->state == C_CONNECTING) {
-        int err = p_dial_result(c->fd);
+        int err = c->udp ? 0 : p_dial_result(c->fd);
         if (err) { conn_close(i, p_strerr(err)); return; }
         if (punch_conn_ready(i)) return;
         c->state = C_HS;
@@ -345,6 +356,7 @@ static void conn_write(int i)
         long n = hs_write1(&c->hs, (const uint8_t *)pl, (size_t)pn, m1);
         raw_send(c, m1, (size_t)n);
     }
+    if (c->udp) { udp_send_conn(i); return; }
     while (c->out.len) {
         long w = p_send(c->fd, c->out.p, c->out.len);
         if (w == P_AGAIN) return;
@@ -415,6 +427,28 @@ int link_punch(int fd, const uint8_t ed[32], const char *addr)
     return i;
 }
 
+/* UDP 链路(udp.c 的 KCP 会话 us-1): 发起方给 ed, 照 TCP 拨号那样先发握手第一条; 应答方等握手 */
+int conn_new_udp(int us, int init, const uint8_t ed[32], const char *addr)
+{
+    member_t *pm = init ? member_by_ed(ed) : NULL;
+    if (init && !pm) return -1;
+    int i = conn_alloc(-1, init);
+    if (i < 0) return -1;
+    conn_t *c = &G.c[i];
+    c->udp = us; c->fam = 4;
+    snprintf(c->addr, sizeof c->addr, "%s", addr);
+    if (init) {
+        c->pm = pm; memcpy(c->peer, ed, 32);
+        hs_init(&c->hs, 1, G.id.xsec, G.id.x, pm->x);
+        c->state = C_CONNECTING;
+        conn_write(i);                                   /* 不用等连通: 直接发握手第一条 */
+    } else {
+        c->state = C_HS;
+        hs_init(&c->hs, 0, G.id.xsec, G.id.x, NULL);
+    }
+    return i;
+}
+
 /* 可达节点接受一条入站链路; fd 也可以由别的程序递进来(中转 8443 上按第一个字节分流后转给我们) */
 static void take_inbound(int fd, const char *addr)
 {
@@ -464,6 +498,7 @@ static void tick(void)
         if (!tg->addr[0] && !tg->alt[0] && !tg->nep) continue;   /* 只有 IPv6 地址 */
         dial(t, 0);
     }
+    udp_sync();
     disc_tick();
     disc_pend_tick();
     qual_tick();
@@ -534,7 +569,7 @@ int mesh_run(const char *dir)
 {
     p_init();
     if (mesh_conf_load(dir)) return 1;
-    G.lfd = G.cfd = G.lfd6 = -1;
+    G.lfd = G.cfd = G.lfd6 = G.ufd = -1;
     relay_sync();
     if (G.ctl[0]) {
         /* 控制口独占: 拿不到 = 本机已经有一份在跑。升级接班的那份要等上一份让出来(还等不到就清掉残留的旧进程);
@@ -561,7 +596,8 @@ int mesh_run(const char *dir)
         if (G.lfd >= 0) { p[n].fd = G.lfd; p[n].ev = P_IN; map[n++] = -1; }
         if (G.lfd6 >= 0) { p[n].fd = G.lfd6; p[n].ev = P_IN; map[n++] = -3; }
         if (G.cfd >= 0) { p[n].fd = G.cfd; p[n].ev = P_IN; map[n++] = -2; }
-        for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE) {
+        if (G.ufd >= 0) { p[n].fd = G.ufd; p[n].ev = P_IN; map[n++] = -4; }
+        for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE && G.c[i].fd >= 0) {
             p[n].fd = G.c[i].fd;
             p[n].ev = (short)(P_IN | (G.c[i].out.len || G.c[i].state == C_CONNECTING ? P_OUT : 0));
             map[n++] = i;
@@ -571,7 +607,7 @@ int mesh_run(const char *dir)
         sh_poll_add(p, &n, map);
         rel_poll_add(p, &n, map);
         pkg_poll_add(p, &n, map);
-        int r = p_poll(p, n, 300);
+        int r = p_poll(p, n, udp_active() ? 10 : 300);   /* 有 UDP 链路: KCP 要 10ms 的节拍 */
         if (r < 0) { logf_("poll: %s", p_strerr(p_lasterr())); return 1; }
         for (int k = 0; r > 0 && k < n; k++) {
             short rev = p[k].rev;
@@ -579,6 +615,7 @@ int mesh_run(const char *dir)
             int m = map[k];
             if (m == -1) do_accept(G.lfd);
             else if (m == -3) do_accept(G.lfd6);
+            else if (m == -4) udp_io();
             else if (m == -2) ctl_accept();
             else if (m < 1000) {
                 if (G.c[m].state == C_FREE || G.c[m].fd != (int)p[k].fd) continue;
@@ -592,6 +629,7 @@ int mesh_run(const char *dir)
             else pkg_io(m - 5000, rev);
         }
         for (int i = 0; i < MAXC; i++) if (G.c[i].state != C_FREE && G.c[i].state != C_CONNECTING && G.c[i].out.len) conn_write(i);
+        udp_tick();
         tick();
         sh_tick();
         rel_tick();

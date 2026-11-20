@@ -37,6 +37,8 @@ void p_open_firewall(int port);             /* 算可达开监听后放行入站
 int  p_udp_open(void);                      /* 非阻塞 UDP socket; 失败 -1 */
 int  p_udp_sendto(int fd, const char *host, int port, const void *b, size_t n);   /* 0 成功 */
 long p_udp_recv(int fd, void *b, size_t cap); /* >0 字节数; P_AGAIN; P_FAIL */
+int  p_udp_bind(int port);                   /* 非阻塞 UDP socket 绑 0.0.0.0:port(UDP 链路用); 失败 -1 */
+long p_udp_recvfrom(int fd, void *b, size_t cap, char *from, size_t fcap);   /* 同 p_udp_recv, from = "IP:端口" */
 int  p_local_ip(const char *peer_host, char *out, size_t cap);   /* 本机去 peer_host 时用的局域网地址; 0 成功 */
 int  p_local_ipv4s(char (*out)[48], int max);                  /* 本机各网卡的 IPv4(不含回环), 返回个数 */
 int  p_local_ip6(char *out, size_t cap);                        /* 本机去公网时用的 IPv6 源地址(只认全球单播 2000::/3); 0 成功 */

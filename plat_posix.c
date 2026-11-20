@@ -169,14 +169,18 @@ void p_open_firewall(int port)
     snprintf(cmd, sizeof cmd, "command -v ip6tables >/dev/null 2>&1 && { ip6tables -C INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null"
              " || ip6tables -I INPUT 1 -p tcp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
     if (system(cmd)) { /* 同上, IPv6 */ }
+    snprintf(cmd, sizeof cmd, "command -v iptables >/dev/null 2>&1 && { iptables -C INPUT -p udp --dport %d -j ACCEPT 2>/dev/null"
+             " || iptables -I INPUT 1 -p udp --dport %d -j ACCEPT; } >/dev/null 2>&1", port, port);
+    if (system(cmd)) { /* UDP 链路 */ }
     /* OpenWrt fw4(nftables): iptables 那条进不了 fw4 的 input_wan, WAN 进来的照样被拒; 写一条 uci 规则(重载后还在) + 当场插进去 */
     char fw[1400];
     snprintf(fw, sizeof fw, "[ -x /sbin/fw4 ] && command -v uci >/dev/null 2>&1 && command -v nft >/dev/null 2>&1 && {"
-             " [ \"$(uci -q get firewall.custhub.dest_port)\" = %d ] || { uci -q delete firewall.custhub; uci set firewall.custhub=rule;"
-             " uci set firewall.custhub.name=custhub; uci set firewall.custhub.src=wan; uci set firewall.custhub.proto=tcp;"
+             " { [ \"$(uci -q get firewall.custhub.dest_port)\" = %d ] && [ \"$(uci -q get firewall.custhub.proto)\" = 'tcp udp' ]; } || { uci -q delete firewall.custhub; uci set firewall.custhub=rule;"
+             " uci set firewall.custhub.name=custhub; uci set firewall.custhub.src=wan; uci set firewall.custhub.proto='tcp udp';"
              " uci set firewall.custhub.dest_port=%d; uci set firewall.custhub.target=ACCEPT; uci commit firewall; };"
-             " nft list chain inet fw4 input_wan | grep -q 'tcp dport %d .*accept' || nft insert rule inet fw4 input_wan tcp dport %d counter accept comment custhub; } >/dev/null 2>&1",
-             port, port, port, port);
+             " nft list chain inet fw4 input_wan | grep -q 'tcp dport %d .*accept' || nft insert rule inet fw4 input_wan tcp dport %d counter accept comment custhub;"
+             " nft list chain inet fw4 input_wan | grep -q 'udp dport %d .*accept' || nft insert rule inet fw4 input_wan udp dport %d counter accept comment custhub; } >/dev/null 2>&1",
+             port, port, port, port, port, port);
     if (system(fw)) { /* 不是 fw4 的 OpenWrt: 不影响 */ }
 #else
     (void)port;
@@ -417,6 +421,27 @@ int p_udp_sendto(int fd, const char *host, int port, const void *b, size_t n)
     a.sin_family = AF_INET; a.sin_port = htons((unsigned short)port);
     if (inet_pton(AF_INET, host, &a.sin_addr) != 1) return -1;
     return sendto(fd, b, n, 0, (struct sockaddr *)&a, sizeof a) == (ssize_t)n ? 0 : -1;
+}
+
+int p_udp_bind(int port)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0), big = 1 << 20;
+    if (fd < 0) return -1;
+    fcntl(fd, F_SETFD, FD_CLOEXEC); fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &big, sizeof big); setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &big, sizeof big);
+    struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((unsigned short)port);
+    if (bind(fd, (struct sockaddr *)&a, sizeof a)) { close(fd); return -1; }
+    return fd;
+}
+
+long p_udp_recvfrom(int fd, void *b, size_t cap, char *from, size_t fcap)
+{
+    struct sockaddr_in a; socklen_t l = sizeof a; char h[48];
+    ssize_t r = recvfrom(fd, b, cap, 0, (struct sockaddr *)&a, &l);
+    if (r < 0) return would(errno) ? P_AGAIN : P_FAIL;
+    if (a.sin_family != AF_INET || !inet_ntop(AF_INET, &a.sin_addr, h, sizeof h)) return P_AGAIN;
+    snprintf(from, fcap, "%s:%d", h, ntohs(a.sin_port));
+    return (long)r;
 }
 
 long p_udp_recv(int fd, void *b, size_t cap)

@@ -139,15 +139,15 @@ static int discover(char *why, size_t wcap)
     return snprintf(why, wcap, "路由器不支持端口映射(没有 WANIPConnection)"), -1;
 }
 
-static int add_map(int ext, int in, int lease, int *fault)
+static int add_map(int ext, int in, int lease, int *fault, const char *proto)
 {
     static char body[2048], head[600], out[8192];
     snprintf(body, sizeof body,
         "<?xml version=\"1.0\"?>\r\n<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">"
         "<s:Body><u:AddPortMapping xmlns:u=\"%s\"><NewRemoteHost></NewRemoteHost><NewExternalPort>%d</NewExternalPort>"
-        "<NewProtocol>TCP</NewProtocol><NewInternalPort>%d</NewInternalPort><NewInternalClient>%s</NewInternalClient>"
+        "<NewProtocol>%s</NewProtocol><NewInternalPort>%d</NewInternalPort><NewInternalClient>%s</NewInternalClient>"
         "<NewEnabled>1</NewEnabled><NewPortMappingDescription>custhub</NewPortMappingDescription>"
-        "<NewLeaseDuration>%d</NewLeaseDuration></u:AddPortMapping></s:Body></s:Envelope>\r\n", U.svc, ext, in, U.lan_ip, lease);
+        "<NewLeaseDuration>%d</NewLeaseDuration></u:AddPortMapping></s:Body></s:Envelope>\r\n", U.svc, ext, proto, in, U.lan_ip, lease);
     snprintf(head, sizeof head, "POST %s HTTP/1.0\r\nHost: %s:%d\r\nContent-Type: text/xml; charset=\"utf-8\"\r\n"
              "SOAPAction: \"%s#AddPortMapping\"\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
              U.ctl_path, U.ctl_host, U.ctl_port, U.svc, (int)strlen(body));
@@ -165,7 +165,7 @@ static int map_now(int in, char *why, size_t wcap)
     int fault = 0, lease = U.perm ? 0 : 3600;
     for (int k = 0; k < 16; k++) {
         int ext = (U.ext ? U.ext : 8444) + (U.ext ? 0 : k);
-        if (!add_map(ext, in, lease, &fault)) return ext;
+        if (!add_map(ext, in, lease, &fault, "TCP")) { int f2 = 0; add_map(ext, in, lease, &f2, "UDP"); return ext; }   /* UDP 同一个外部端口(UDP 链路用; 不成也不影响 TCP) */
         if (fault == 725 && lease) { lease = 0; U.perm = 1; k--; continue; }   /* 只认永久映射: 记住, 续租直接用永久 */
         if ((fault != 718 && fault != 729) || U.ext) break;          /* 718 被别的映射占了 / 729 被路由器自己用着(比如路由器上也跑着本程序): 换下一个 */
     }

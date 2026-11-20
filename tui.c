@@ -143,7 +143,7 @@ static void load_ls(void)
             r->rec = 1; r->age = age;
             r->relay = strstr(ln, " 可达 ") != NULL;         /* 可达看它自己的声明(自检), 不看名单 */
             if (strcmp(ad, "-")) snprintf(r->addr, sizeof r->addr, "%s", ad);
-            r->punch = strstr(ln, " 打洞=") != NULL;        /* 报了打洞端点 */
+            r->punch = strstr(ln, "打洞=") != NULL;        /* 报了打洞端点(TCP 的 " 打洞=" 或 " UDP打洞=") */
             const char *v6 = strstr(ln, " IPv6=[");      /* IPv6 可达地址 */
             if (v6) sscanf(v6 + 6, "%79s", r->addr6);
             snprintf(r->via, sizeof r->via, "%s", via); snprintf(r->status, sizeof r->status, "%s", st); snprintf(r->ver, sizeof r->ver, "%s", vr);
@@ -198,6 +198,7 @@ static void set_info(row_t *r, const char *mi)
     char *s6 = strstr(b, "|6="); if (s6) *s6 = 0;      /* IPv6、局域网端点那几段不是机器信息 */
     char *se = strstr(b, "|e="); if (se) *se = 0;
     char *sp = strstr(b, "|p="); if (sp) *sp = 0;
+    char *su = strstr(b, "|u="); if (su) *su = 0;
     for (char *c = b; *c; c++) if (*c == '_') *c = ' ';
     char *f[4] = { b, "", "", "" }; int k = 1;
     for (char *c = b; *c && k < 4; c++) if (*c == '|') { *c = 0; f[k++] = c + 1; }

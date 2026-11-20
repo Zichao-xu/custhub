@@ -95,6 +95,8 @@ custhub key lock
 - **交换端点（DISCO）**：打洞端点随位置记录在网里传开，不另发消息。
 - **同时拨**：双方都有打洞端点、又还没有直连时，在同一个时间窗里（每 15 秒里的前 6 秒，各按各的钟）每秒从打洞端口拨对方的打洞端点。两边的握手包在路上交错时，双方 NAT 都已经开了口，就合成一条 TCP。公钥小的一方当 Noise 发起方。
 
+**UDP 链路**：TCP 是底座，UDP 只在两台之间没有直接的 TCP 链路时才用（比如 TCP 打洞打不通）。每台在 TCP 监听的同一个端口号上开一个 UDP 端口。不可达的机器向两台可达节点的 UDP 端口查映射（发 `W`，回 `w` 加地址），映射一致才写进位置记录（`UDP打洞=`）。双方在打洞的时间窗里互发招呼包（`P`），公钥小的一方开 KCP 会话（`K`）。会话里跑的就是 TCP 链路那套 Noise 握手和帧，只是字节流换成 KCP（`vendor/ikcp.c`，MIT；流模式，MTU 1200）。之后同一对机器有了 TCP 直连，UDP 链路就关掉。UPnP 会把同一个外部端口的 UDP 也映射上；Linux / OpenWrt 防火墙同时放行 UDP。
+
 **双栈热备**：本机有公网 IPv6 时，同时监听 IPv4 和 IPv6，两种地址分开做回连自检、分开过观察期、分开算可达，任一可达就算可达节点。路由器或光猫的 IPv6 防火墙常会挡入站连接，这种情况下 IPv6 不可达，但照样能主动连出去。声明的是网卡上的固定 IPv6 地址，不用每天会换的临时地址。Windows 上程序启动时会在防火墙里放行自己（规则名 custhub，按程序放行，IPv4、IPv6 都管）。对方两种都可达时，两条链路同时挂着：新流量优先走 IPv6，IPv6 断了马上落到 IPv4，不用重新拨号；IPv6 恢复后新流量再回到 IPv6。断线时正在跑的连接要重连一次。位置记录、地址簿、种子里的 IPv6 地址写成 `[地址]:端口`。conf 可用 `listen6` / `announce6` 指定（同 `listen` / `announce`）。
 
 ## 安全模型
@@ -131,6 +133,7 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 | `role-test.sh` | 可达自检、观察期、报到 / 批准 |
 | `lan-test.sh` | 多端点: 不可达的两台靠各自报的局域网端点直接连上 |
 | `punch-test.sh` | 打洞: STUN 查映射、端点随位置记录传开、两台不可达的同时拨直连(要 iptables, 测试时丢 RST 模拟 NAT) |
+| `udp-test.sh` | UDP 链路: 查映射、UDP 打洞、KCP 上跑握手和帧; 丢 20% 的包 1MB 原样到达 |
 | `v6-test.sh` | 双栈: IPv4、IPv6 分开算可达; 两条链路热备, 优先 IPv6, 断了马上走 IPv4 |
 | `sh-test.sh` | shell：命令、退出码、大输出、交互、窗口大小、Ctrl-C、收尾 |
 | `upnp-test.sh` | UPnP 自动映射（假路由器） |
@@ -154,4 +157,4 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 
 ## 许可证
 
-GPL-3.0。`vendor/` 里的 Monocypher 是 CC0-1.0 / BSD-2-Clause 双许可（见 `vendor/LICENCE.md`）。
+GPL-3.0。`vendor/` 里的 Monocypher 是 CC0-1.0 / BSD-2-Clause 双许可（见 `vendor/LICENCE.md`）；KCP（`vendor/ikcp.c`，1.7 版）是 MIT 许可（见 `vendor/LICENSE-kcp`）。

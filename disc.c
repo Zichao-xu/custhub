@@ -314,6 +314,8 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
         *bar = 0;
         char *s6 = strstr(bar + 1, "|6=");                /* 机器信息后面跟 |e=<局域网端点> |6=<IPv6 地址 / -> */
         if (s6) { *s6 = 0; snprintf(r->addr6, sizeof r->addr6, "%s", s6 + 3); }
+        char *su = strstr(bar + 1, "|u=");
+        if (su) { *su = 0; snprintf(r->upunch, sizeof r->upunch, "%s", su + 3); }
         char *sp = strstr(bar + 1, "|p=");
         if (sp) { *sp = 0; snprintf(r->punch, sizeof r->punch, "%s", sp + 3); }
         char *se = strstr(bar + 1, "|e=");
@@ -340,7 +342,7 @@ void disc_rec_in(int from, const char *line, size_t n)
     if (cur && r.seq <= cur->seq) return;
     int fresh = !cur;
     if (!cur) { if (G.nr >= MAXR) return; cur = &G.r[G.nr++]; }
-    int changed = fresh ? (r.relay || r.addr6[0] == '[' || r.eps[0]) : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)) || strcmp(cur->addr6, r.addr6) || strcmp(cur->eps, r.eps));   /* 可达声明 / 端点有变 */
+    int changed = fresh ? (r.relay || r.addr6[0] == '[' || r.eps[0]) : (r.relay != cur->relay || (r.relay && strcmp(cur->addr, r.addr)) || strcmp(cur->addr6, r.addr6) || strcmp(cur->eps, r.eps) || strcmp(cur->upunch, r.upunch));   /* 可达声明 / 端点有变 */
     r.rx_ms = now_ms();
     *cur = r;
     hint_note(r.ed, r.relay && addr_fam(r.addr) == 4 ? r.addr : NULL);   /* 地址簿跟着它自己的声明走: 重启 / 发种子用 */
@@ -435,7 +437,8 @@ void disc_tick(void)
             }
         }
     }
-    char pun[80] = ""; if (G.punch[0] && !G.r4) snprintf(pun, sizeof pun, "|p=%s", G.punch);
+    char pun[160] = ""; if (G.punch[0] && !G.r4) snprintf(pun, sizeof pun, "|p=%s", G.punch);
+    if (G.upunch[0] && !G.r4) { size_t l = strlen(pun); snprintf(pun + l, sizeof pun - l, "|u=%s", G.upunch); }
     snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s%s", G.me_relay ? "relay" : "node",
              G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, pun, six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {

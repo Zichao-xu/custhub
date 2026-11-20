@@ -655,6 +655,30 @@ int p_udp_sendto(int fd, const char *host, int port, const void *b, size_t n)
     return sendto((SOCKET)fd, (const char *)b, (int)n, 0, (struct sockaddr *)&a, sizeof a) == (int)n ? 0 : -1;
 }
 
+int p_udp_bind(int port)
+{
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0); int big = 1 << 20;
+    if (s == INVALID_SOCKET) return -1;
+    u_long one = 1; ioctlsocket(s, FIONBIO, &one);
+    SetHandleInformation((HANDLE)(uintptr_t)s, HANDLE_FLAG_INHERIT, 0);
+    BOOL no = FALSE; DWORD got = 0;                      /* 对方端口不可达(ICMP)时 Windows 会让下一次 recvfrom 报错: 关掉 */
+    WSAIoctl(s, _WSAIOW(IOC_VENDOR, 12), &no, sizeof no, NULL, 0, &got, NULL, NULL);
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&big, sizeof big); setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char *)&big, sizeof big);
+    struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((u_short)port);
+    if (bind(s, (struct sockaddr *)&a, sizeof a)) { closesocket(s); return -1; }
+    return (int)s;
+}
+
+long p_udp_recvfrom(int fd, void *b, size_t cap, char *from, size_t fcap)
+{
+    struct sockaddr_in a; int l = sizeof a; char h[48];
+    int r = recvfrom((SOCKET)fd, (char *)b, (int)cap, 0, (struct sockaddr *)&a, &l);
+    if (r < 0) { int e = WSAGetLastError(); return would(e) || e == WSAECONNRESET ? P_AGAIN : P_FAIL; }
+    if (a.sin_family != AF_INET || !inet_ntop(AF_INET, &a.sin_addr, h, sizeof h)) return P_AGAIN;
+    snprintf(from, fcap, "%s:%d", h, ntohs(a.sin_port));
+    return r;
+}
+
 long p_udp_recv(int fd, void *b, size_t cap)
 {
     int r = recvfrom((SOCKET)fd, (char *)b, (int)cap, 0, NULL, NULL);

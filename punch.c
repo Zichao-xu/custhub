@@ -76,16 +76,75 @@ static void stun_tick(int64_t now)
     Q.st = 1; Q.n = 0; Q.t0 = now;
 }
 
+/* ---------- UDP: 查映射(发 'W' 给两台可达节点的同一个 IP:端口, 回 'w' 地址)、打洞(没有直接的 TCP 链路时) ---------- */
+static char ua[2][64], ug[2][64]; static int nua, nug, usym; static int64_t udl, next_uq;
+
+void punch_udp_reply(const char *from, const char *addr)
+{
+    char h[64]; int port;
+    if (!udl || hostport(addr, h, sizeof h, &port) || priv(h) || nug >= 2) return;
+    for (int k = 0; k < nua; k++) if (!strcmp(ua[k], from)) { snprintf(ug[nug++], sizeof ug[0], "%s", addr); ua[k][0] = 0; return; }
+}
+
+static void ustun_tick(int64_t now)
+{
+    if (G.ufd < 0) { G.upunch[0] = 0; return; }
+    if (udl) {
+        if (now < udl && nug < nua) return;
+        udl = 0;
+        if (nug && (nug == 1 || !strcmp(ug[0], ug[1]))) {
+            if (strcmp(G.upunch, ug[0])) { logf_("UDP 打洞端点: %s", ug[0]); G.mypub_ms = 0; }
+            snprintf(G.upunch, sizeof G.upunch, "%s", ug[0]); usym = 0;
+        } else if (nug == 2) {
+            if (G.upunch[0] || !usym) logf_("UDP 打洞: 两个可达节点看到的映射不一样(%s / %s), 对称型 NAT, 不报", ug[0], ug[1]);
+            G.upunch[0] = 0; usym = 1; G.mypub_ms = 0;
+        }
+        next_uq = now + (nug ? 300000 : 30000);
+        return;
+    }
+    if (now < next_uq) return;
+    nua = nug = 0;
+    for (int i = 0; i < G.nr && nua < 2; i++) {
+        rec_t *r = &G.r[i];
+        if (!r->relay || addr_fam(r->addr) != 4 || !strcmp(r->addr, "-") || !member_by_ed(r->ed)) continue;
+        snprintf(ua[nua++], sizeof ua[0], "%s", r->addr);
+    }
+    if (!nua) { next_uq = now + 5000; return; }
+    for (int k = 0; k < nua; k++) udp_raw(ua[k], "W", 1);
+    udl = now + 3000;
+}
+
+static void udp_punch(void)
+{
+    char h[64]; int port;
+    for (int i = 0; i < G.nr; i++) {
+        rec_t *r = &G.r[i];
+        if (!r->upunch[0] || r->relay || !member_by_ed(r->ed) || !memcmp(r->ed, G.id.ed, 32)) continue;
+        if (conn_by_peer_fam(r->ed, 4) >= 0 || conn_by_peer_fam(r->ed, 6) >= 0 || conn_by_peer_fam(r->ed, 'u') >= 0) continue;   /* 已有直接的链路 */
+        if (hostport(r->upunch, h, sizeof h, &port) || priv(h)) continue;
+        int busy = 0; for (int k = 0; k < MAXC; k++) if (G.c[k].state != C_FREE && G.c[k].udp && !memcmp(G.c[k].peer, r->ed, 32)) busy = 1;
+        uint8_t m[33]; m[0] = 'P'; memcpy(m + 1, G.id.ed, 32);
+        udp_raw(r->upunch, m, sizeof m);                 /* 招呼: 给本机 NAT 开口子 */
+        if (!busy && memcmp(G.id.ed, r->ed, 32) < 0) udp_dial(r->ed, r->upunch);   /* 公钥小的一方开 KCP 会话(握手包本身也在打洞, KCP 会重传) */
+    }
+}
+
 void punch_tick(void)
 {
     int64_t now = now_ms();
     char h[64]; int lp = 0;
     const char *e = getenv("CUSTHUB_PUNCH_PORT");
     G.punch_port = G.lfd >= 0 && !G.relay_off && !hostport(G.lspec, h, sizeof h, &lp) ? (e ? atoi(e) : lp + 10) : 0;
-    if (!G.punch_port || G.r4 || !member_by_ed(G.id.ed)) { if (G.punch[0]) { G.punch[0] = 0; G.mypub_ms = 0; } q_close(); return; }   /* 可达的不用打洞 */
+    if (!G.punch_port || G.r4 || !member_by_ed(G.id.ed)) {   /* 可达的不用打洞 */
+        if (G.punch[0] || G.upunch[0]) { G.punch[0] = G.upunch[0] = 0; G.mypub_ms = 0; }
+        q_close(); return;
+    }
     stun_tick(now);
-    if (!G.punch[0] || (wall_ms() / 1000) % 15 >= 6) return;        /* 双方共用的时间窗 */
+    ustun_tick(now);
+    if ((wall_ms() / 1000) % 15 >= 6) return;            /* 双方共用的时间窗 */
     static int64_t last; if (now - last < 1000) return; last = now;
+    if (G.upunch[0]) udp_punch();
+    if (!G.punch[0] || getenv("CUSTHUB_NO_TCP_PUNCH")) return;
     for (int i = 0; i < G.nr; i++) {
         rec_t *r = &G.r[i]; int port;
         if (!r->punch[0] || r->relay || !member_by_ed(r->ed) || !memcmp(r->ed, G.id.ed, 32)) continue;   /* 对方可达的照常拨, 不用打洞 */

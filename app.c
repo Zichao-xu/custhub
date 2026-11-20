@@ -172,8 +172,9 @@ void ls_text(buf_t *o)
         member_by_ed(G.id.ed) ? "" : ", 还没被批准");
     add(o, "端口: %s\n", G.port_state[0] ? G.port_state : "检测中");
     if (G.port6_state[0]) add(o, "IPv6: %s\n", G.port6_state);
-    add(o, "能力: %s\n", G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] ? "P2P" : "跳转");   /* 本机自己的能力(界面用, 和别人从记录里算的一致) */
+    add(o, "能力: %s\n", G.r4 && G.r6 ? "双栈" : G.r4 ? "公网" : G.r6 ? "IPv6" : G.punch[0] || G.upunch[0] ? "P2P" : "跳转");   /* 本机自己的能力(界面用, 和别人从记录里算的一致) */
     if (!G.r4 && G.punch_port) add(o, "打洞: %s\n", G.punch[0] ? G.punch : "没有可用的打洞端点(还在查, 或对称型 NAT)");
+    if (!G.r4 && G.ufd >= 0) add(o, "UDP 打洞: %s\n", G.upunch[0] ? G.upunch : "没有可用的打洞端点(还在查, 可达节点 UDP 不通, 或对称型 NAT)");
     add(o, "挂着:\n");
     for (int t = 0; t < G.nt; t++) {
         int c = conn_by_peer(G.t[t].ed);
@@ -186,7 +187,7 @@ void ls_text(buf_t *o)
     }
     add(o, "链路:\n");
     for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP)
-        add(o, "  %-10s %s %s\n", name_of(G.c[i].peer), G.c[i].punch ? "打洞" : G.c[i].initiator ? "出站" : "入站", G.c[i].addr);
+        add(o, "  %-10s %s %s\n", name_of(G.c[i].peer), G.c[i].udp ? "UDP" : G.c[i].punch ? "打洞" : G.c[i].initiator ? "出站" : "入站", G.c[i].addr);
     add(o, "位置记录:\n");
     int64_t now = now_ms();
     for (int i = 0; i < G.nr; i++) {
@@ -195,6 +196,7 @@ void ls_text(buf_t *o)
             r->addr, r->relays, r->status, r->info[0] ? r->info : "-", r->ver, (long)((now - r->rx_ms) / 1000), r->addr6[0] ? " IPv6=" : "", r->addr6);
         if (r->eps[0]) { o->len--; add(o, " 端点=%s\n", r->eps); }
         if (r->punch[0]) { o->len--; add(o, " 打洞=%s\n", r->punch); }
+        if (r->upunch[0]) { o->len--; add(o, " UDP打洞=%s\n", r->upunch); }
     }
 }
 
