@@ -9,13 +9,13 @@
 #include <string.h>
 #include <stdarg.h>
 
-typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16], host[64], plat[24], os[64], model[64]; int relay, rec, link, link4, link6, self, punch; long age; char addr6[80]; } row_t;
+typedef struct { char name[32], code[8], key[48], addr[64], via[96], status[128], ver[16], host[64], plat[24], os[64], model[64]; int relay, rec, link, link4, link6, linku, self, punch; long age; char addr6[80], tp[64], up[64]; } row_t;
 typedef struct { char code[8], key[48], from[80], host[64], plat[24], ver[16]; } pend_t;
 
 static row_t RW[MAXM]; static int nrw;
 static void set_info(row_t *r, const char *mi);
 static pend_t PD[32]; static int npd;
-static char my6[200] = "", mycap[16] = "";        /* 本机能力(ls 的 "能力: …") */                            /* 本机 IPv6 那一行(ls 的 "IPv6: …") */
+static char my6[200] = "", mycap[16] = "", mytp[200] = "", myup[200] = "";   /* 本机 IPv6 / 能力 / TCP、UDP 打洞(ls 的那几行) */        /* 本机能力(ls 的 "能力: …") */                            /* 本机 IPv6 那一行(ls 的 "IPv6: …") */
 static char tdir[1200], tself[1200], me[64] = "?", info[200] = "", msg[600] = "", mykey[48] = "";
 static int unlocked, sel, top, rows = 24, cols = 80, msg_err;
 static int64_t t_ls, t_status, t_pend;
@@ -97,7 +97,7 @@ static void load_ls(void)
     if (ctl_get("TRUST", t, sizeof t) < 0) { set_msg(1, "连不上本机守护(custhub 服务没在跑?)"); return; }
     if (ctl_get("LS", l, sizeof l) < 0) return;
     int was = sel; char wasn[32] = ""; if (was < nrw) snprintf(wasn, sizeof wasn, "%s", RW[was].name);
-    nrw = 0; my6[0] = 0; mycap[0] = 0;
+    nrw = 0; my6[0] = 0; mycap[0] = 0; mytp[0] = 0; myup[0] = 0;
     char *sv = NULL;
     for (char *ln = m_tok(t, "\n", &sv); ln && nrw < MAXM; ln = m_tok(NULL, "\n", &sv)) {
         char k[8], nm[32], kb[48], ad[64] = "";
@@ -113,6 +113,8 @@ static void load_ls(void)
     for (char *ln = m_tok(l, "\n", &sv); ln; ln = m_tok(NULL, "\n", &sv)) {
         if (!strncmp(ln, "IPv6: ", 6)) { snprintf(my6, sizeof my6, "%s", ln + 6); continue; }
         if (!strncmp(ln, "能力: ", 8)) { snprintf(mycap, sizeof mycap, "%s", ln + 8); continue; }
+        if (!strncmp(ln, "打洞: ", 8)) { snprintf(mytp, sizeof mytp, "%s", ln + 8); continue; }
+        if (!strncmp(ln, "UDP 打洞: ", 12)) { snprintf(myup, sizeof myup, "%s", ln + 12); continue; }
         if (!strncmp(ln, "本机 ", 7)) {
             sscanf(ln + 7, "%63[^(]", me);
             snprintf(info, sizeof info, "%s", ln);
@@ -128,7 +130,8 @@ static void load_ls(void)
         if (sec == 1) {                                 /* "  名字  出站/入站  地址": 本机和它有哪几种链路 */
             char dir_[16], la[96] = "";
             r->link = 1;
-            if (sscanf(ln, " %*s %15s %95s", dir_, la) == 2 && la[0] == '[') r->link6 = 1; else r->link4 = 1;
+            int f = sscanf(ln, " %*s %15s %95s", dir_, la);
+            if (f == 2 && !strcmp(dir_, "UDP")) r->linku = 1; else if (f == 2 && la[0] == '[') r->link6 = 1; else r->link4 = 1;
         }
         else if (sec == 2) {
             char ad[64] = "", via[96] = "", st[128] = "", vr[16] = "", mi[200] = ""; long age = 0;
@@ -144,6 +147,9 @@ static void load_ls(void)
             r->relay = strstr(ln, " 可达 ") != NULL;         /* 可达看它自己的声明(自检), 不看名单 */
             if (strcmp(ad, "-")) snprintf(r->addr, sizeof r->addr, "%s", ad);
             r->punch = strstr(ln, "打洞=") != NULL;        /* 报了打洞端点(TCP 的 " 打洞=" 或 " UDP打洞=") */
+            const char *tp = strstr(ln, " 打洞="), *up = strstr(ln, " UDP打洞=");
+            if (tp) sscanf(tp + 8, "%63s", r->tp);
+            if (up) sscanf(up + 11, "%63s", r->up);
             const char *v6 = strstr(ln, " IPv6=[");      /* IPv6 可达地址 */
             if (v6) sscanf(v6 + 6, "%79s", r->addr6);
             snprintf(r->via, sizeof r->via, "%s", via); snprintf(r->status, sizeof r->status, "%s", st); snprintf(r->ver, sizeof r->ver, "%s", vr);
@@ -236,7 +242,7 @@ static void draw(void)
         if (i < nrw) {
             row_t *r = &RW[i]; int on = online(r);
             if (r->self) snprintf(conn, sizeof conn, "本机%s", !my6[0] || strstr(my6, "没有 IPv6") ? "" : strstr(my6, ", 可达") ? "(IPv6 可达)" : strstr(my6, "已开启") ? "(IPv6 观察中)" : "(有 IPv6, 外面连不进来)");
-            else if (r->link) snprintf(conn, sizeof conn, "直连%s%s%s", r->link4 && r->link6 ? "(IPv4+IPv6)" : r->link6 ? "(IPv6)" : "", r->relay ? " " : "", r->relay ? r->addr : "");
+            else if (r->link) snprintf(conn, sizeof conn, "直连%s%s%s", r->link4 && r->link6 ? "(IPv4+IPv6)" : r->link6 ? "(IPv6)" : !r->link4 && r->linku ? "(UDP)" : "", r->relay ? " " : "", r->relay ? r->addr : "");
             else if (r->rec && strcmp(r->via, "-")) snprintf(conn, sizeof conn, "经 %s", r->via);
             else snprintf(conn, sizeof conn, "%s", r->relay ? r->addr : "-");
             out(i == sel ? "\x1b[7m" : "");
@@ -267,6 +273,8 @@ static void draw(void)
                  r->addr6[0] ? (r->relay && addr_fam(r->addr) == 4 ? "  IPv6 " : "IPv6 ") : "", r->addr6, r->plat[0] ? r->plat : "", r->key, r->rec && !r->self ? "  " : "");
         if (r->rec && !r->self) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "最近 %lds 前", r->age); }
         if (r->self && my6[0]) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "  IPv6: %s", my6); }
+        const char *tpa = r->self ? mytp : r->tp, *upa = r->self ? myup : r->up;   /* 打洞端点: TCP / UDP */
+        if (tpa[0] || upa[0]) { size_t l = strlen(det); snprintf(det + l, sizeof det - l, "  打洞 TCP %s  UDP %s", tpa[0] ? tpa : "-", upa[0] ? upa : "-"); }
     } else if (sel >= nrw && sel - nrw < npd) {
         pend_t *p = &PD[sel - nrw]; snprintf(det, sizeof det, " 待批准 %s  机器名 %s  公钥 %.12s…", p->code, p->host, p->key);
     }
