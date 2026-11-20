@@ -66,6 +66,7 @@ typedef struct {
     uint8_t ed[32]; uint64_t seq; int64_t rx_ms;
     int relay; char addr[64], relays[160], status[320], ver[16], info[200];
     char addr6[80];               /* "" = 没报 IPv6; "-" = 有 IPv6 出口但连不进来; "[…]:端口" = IPv6 可达 */
+    char punch[64];               /* 自报的打洞端点(本机打洞端口在公网上的映射, 不同目的地映射不变时才报) */
     char eps[200];                /* 自报的局域网端点 "10.0.0.5:8444,192.168.1.2:8444"(多端点: 别人都试一遍, 同一局域网的自然直连) */   /* info: 平台|机器名|系统|机型(空格换成 _), 跟在版本后面用 | 隔开 */
     char line[800];
 } rec_t;
@@ -81,6 +82,7 @@ typedef struct { uint8_t key[32]; int to_all, nto; uint8_t to[PASSTO][32]; char 
 enum { C_FREE, C_CONNECTING, C_HS, C_UP };
 typedef struct {
     int state, fd, initiator, target, peer_relay;
+    int punch;                    /* 打洞拨的(TCP 同时打开): 双方都在拨, 公钥小的一方当 Noise 发起方 */
     int fam;                      /* 4 / 6: 这条链路走的是 IPv4 还是 IPv6(同一对端两种各留一条, 热备; 收发优先 v6) */
     int closing;                  /* 1 = 发完就断, 不收任何帧; 3 = 名单外节点的报到链路: 发了名单, 再等一会儿它的回连测试请求 */
     int probe_for;                /* 回连测试的拨号(本机替别人测): 请求方链路下标 + 1; 0 = 不是 */
@@ -150,6 +152,7 @@ typedef struct {
     char upnp_why[96];
     int quiet;                    /* 命令行工具: 没配日志文件时不往 stderr 打日志 */
     hint_t h[MAXM]; int nh;       /* 地址簿(disc.c) */
+    char punch[64]; int punch_port;   /* 打洞(punch.c): 本机打洞端点 / 本机打洞用的本地端口 */
     char ctl_token[33];           /* 控制口令牌: 每次启动随机生成, 写进 <目录>/ctl.token(只有 root / 管理员 / 本人读得到) */
 } g_t;
 extern g_t G;
@@ -220,6 +223,10 @@ int  hint_import(const char *line);                       /* "<公钥> <v4|-> [<
 int  ed_relay(const uint8_t ed[32]);                      /* 是可达节点: 自己在记录里声明了, 或名单里带地址(种子线索) */
 /* qual.c: 可达自检 */
 void qual_tick(void);
+/* punch.c: 打洞(STUN 经可达节点 /whoami 查映射, 端点写进位置记录, 双方按同一时间窗同时拨) */
+void punch_tick(void);
+int  punch_conn_ready(int i);
+int  link_punch(int fd, const uint8_t ed[32], const char *addr);   /* link.c */                             /* 打洞链路连通: 本机是应答方就转入等握手; 1 = 已处理 */
 int  me_seed(void);                                      /* 上次就是可达的(地址簿里有本机) / 名单里带地址的老种子: 免观察、先收报到 */
 void upnp_tick(void);                                    /* upnp.c */
 /* rel.c: 发布物 + 自升级 */
@@ -233,7 +240,7 @@ void rel_io(int code, short rev);
 int  pkg_accept(const char *req, char *why, size_t wcap);   /* pkg 服务: 返回交给连通层的本地 fd */
 void pkg_poll_add(pfd_t *p, int *np, int *map);          /* map 5000 起 */
 void pkg_io(int k, short rev);
-void http_take(int fd, const char *req, size_t n);       /* 只读 HTTP: 监听口上收到 GET */
+void http_take(int fd, const char *req, size_t n, const char *peer);       /* 只读 HTTP: 监听口上收到 GET */
 void http_tick(void);
 void join_line(char *out, size_t cap);                    /* app.c: 一行接入命令(第一行是地址, - = 退回 GitHub) */
 const char *upnp_lan_ip(void);

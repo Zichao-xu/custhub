@@ -27,6 +27,7 @@ const char *p_strerr(int e);
 /* 连 host:port。nb=1 时非阻塞, 返回时连接可能还在进行(等 P_OUT 后用 p_dial_result 看结果)
  * 失败返回 -1, why 里写原因 */
 int  p_dial(const char *host, int port, int nb, char *why, size_t wcap);
+int  p_dial_from(const char *host, int port, int lport, char *why, size_t wcap);   /* 从固定本地端口拨(非阻塞; 打洞用, 同一端口可同时拨多处) */
 int  p_dial_result(int fd);                 /* 0 连上了; 否则错误号 */
 int  p_listen(const char *host, int port);  /* 非阻塞监听 fd; 失败 -1 */
 int  p_accept(int lfd, char *peer, size_t pcap);   /* 新 fd(非阻塞), peer = "地址:端口"; 没有 -1 */

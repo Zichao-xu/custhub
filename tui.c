@@ -195,6 +195,7 @@ static void set_info(row_t *r, const char *mi)
     char b[200]; snprintf(b, sizeof b, "%s", mi);
     char *s6 = strstr(b, "|6="); if (s6) *s6 = 0;      /* IPv6、局域网端点那几段不是机器信息 */
     char *se = strstr(b, "|e="); if (se) *se = 0;
+    char *sp = strstr(b, "|p="); if (sp) *sp = 0;
     for (char *c = b; *c; c++) if (*c == '_') *c = ' ';
     char *f[4] = { b, "", "", "" }; int k = 1;
     for (char *c = b; *c && k < 4; c++) if (*c == '|') { *c = 0; f[k++] = c + 1; }

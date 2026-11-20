@@ -103,6 +103,24 @@ int p_dial(const char *host, int port, int nb, char *why, size_t wcap)
     return fd;
 }
 
+int p_dial_from(const char *host, int port, int lport, char *why, size_t wcap)
+{
+    struct sockaddr_in a, l; int one = 1;
+    memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) { snprintf(why, wcap, "不是 IPv4 地址: %s", host); return -1; }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { snprintf(why, wcap, "%s", strerror(errno)); return -1; }
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
+#endif
+    memset(&l, 0, sizeof l); l.sin_family = AF_INET; l.sin_port = htons((uint16_t)lport);
+    if (bind(fd, (struct sockaddr *)&l, sizeof l)) { snprintf(why, wcap, "占不了本地端口 %d: %s", lport, strerror(errno)); close(fd); return -1; }
+    p_nb(fd);
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS) { snprintf(why, wcap, "%s", strerror(errno)); close(fd); return -1; }
+    return fd;
+}
+
 int p_dial_result(int fd)
 {
     int err = 0; socklen_t l = sizeof err;

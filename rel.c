@@ -614,7 +614,7 @@ static void http_reply(int fd, const char *status)
     p_send(fd, h, (size_t)n); p_shut_wr(fd); p_close(fd);
 }
 
-void http_take(int fd, const char *req, size_t n)
+void http_take(int fd, const char *req, size_t n, const char *peer)
 {
     char line[400], path[300] = "", host[100] = "";
     size_t l = 0; while (l < n && l < sizeof line - 1 && req[l] != '\r' && req[l] != '\n') { line[l] = req[l]; l++; } line[l] = 0;
@@ -625,6 +625,10 @@ void http_take(int fd, const char *req, size_t n)
         if (!strncmp(h, "Host:", 5) || !strncmp(h, "host:", 5)) { sscanf(h + 5, " %99[^\r\n ]", host); break; }
     }
     for (char *c = host; *c; c++) if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '.' || *c == ':' || *c == '-' || *c == '[' || *c == ']')) { host[0] = 0; break; }
+    if (!strcmp(path, "/whoami") && peer) {             /* 打洞用的 STUN: 回对方在本机看来的地址:端口 */
+        char h[200]; int hn = snprintf(h, sizeof h, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%s\n", peer);
+        p_send(fd, h, (size_t)hn); p_shut_wr(fd); p_close(fd); return;
+    }
     if (!R.ver[0]) { http_reply(fd, "503 Service Unavailable"); return; }
     const char *lat = "/releases/latest/download/", *dl = "/releases/download/v";
     char file[400] = "", *mem = NULL; size_t mlen = 0;

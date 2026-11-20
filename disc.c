@@ -314,6 +314,8 @@ static int rec_parse(const char *line, size_t n, rec_t *r)
         *bar = 0;
         char *s6 = strstr(bar + 1, "|6=");                /* 机器信息后面跟 |e=<局域网端点> |6=<IPv6 地址 / -> */
         if (s6) { *s6 = 0; snprintf(r->addr6, sizeof r->addr6, "%s", s6 + 3); }
+        char *sp = strstr(bar + 1, "|p=");
+        if (sp) { *sp = 0; snprintf(r->punch, sizeof r->punch, "%s", sp + 3); }
         char *se = strstr(bar + 1, "|e=");
         if (se) { *se = 0; snprintf(r->eps, sizeof r->eps, "%s", se + 3); }
         snprintf(r->info, sizeof r->info, "%s", bar + 1);
@@ -433,8 +435,9 @@ void disc_tick(void)
             }
         }
     }
-    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s", G.me_relay ? "relay" : "node",
-             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, six);
+    char pun[80] = ""; if (G.punch[0] && !G.r4) snprintf(pun, sizeof pun, "|p=%s", G.punch);
+    snprintf(body, sizeof body, "%s %s %s %s %s|%s%s%s%s", G.me_relay ? "relay" : "node",
+             G.r4 ? relay_addr() : G.r6 ? G.pub6 : "-", relays[0] ? relays : "-", status[0] ? status : "-", CH_VERSION, my_info(), eps, pun, six);
     if (strcmp(body, G.mybody) || now - G.mypub_ms > 20000) {
         uint64_t wall = (uint64_t)wall_ms();
         G.myseq = wall > G.myseq ? wall : G.myseq + 1;

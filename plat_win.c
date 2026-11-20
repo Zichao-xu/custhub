@@ -99,6 +99,21 @@ int p_dial(const char *host, int port, int nb, char *why, size_t wcap)
     return (int)s;
 }
 
+int p_dial_from(const char *host, int port, int lport, char *why, size_t wcap)
+{
+    struct sockaddr_in a, l; int one = 1;
+    memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((u_short)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) { snprintf(why, wcap, "不是 IPv4 地址: %s", host); return -1; }
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == INVALID_SOCKET) { snprintf(why, wcap, "开不了 socket"); return -1; }
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
+    memset(&l, 0, sizeof l); l.sin_family = AF_INET; l.sin_port = htons((u_short)lport);
+    if (bind(s, (struct sockaddr *)&l, sizeof l)) { snprintf(why, wcap, "占不了本地端口 %d", lport); closesocket(s); return -1; }
+    p_nb((int)s);
+    if (connect(s, (struct sockaddr *)&a, sizeof a) == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) { snprintf(why, wcap, "拨不出去(%d)", WSAGetLastError()); closesocket(s); return -1; }
+    return (int)s;
+}
+
 int p_dial_result(int fd)
 {
     int err = 0, l = sizeof err;

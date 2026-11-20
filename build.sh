@@ -6,7 +6,7 @@
 # 核心只用 C99 + 平台模块(design-v3 §0): POSIX 目标链 plat_posix.c, Windows 链 plat_win.c; 密码学只用 vendor/ 里的 Monocypher 4.0.2
 set -euo pipefail
 cd "$(dirname "$0")"
-CORE=(main.c util.c b64.c noise.c link.c hop.c disc.c qual.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c sshsig.c tui.c
+CORE=(main.c util.c b64.c noise.c link.c hop.c disc.c qual.c punch.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c sshsig.c tui.c
       vendor/monocypher.c vendor/monocypher-ed25519.c)
 CF=(-std=c99 -Wall -Wextra -Wno-unused-parameter)
 

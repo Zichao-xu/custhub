@@ -148,7 +148,7 @@ static void on_up(int i)
         if (G.relay_off || G.lfd < 0) conn_send(i, F_PROBE, 0, "-", 1);   /* 本机不算可达: 告诉可达节点不用等回连测试请求 */
         return;
     }
-    logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
+    logf_("链路建立 %s(%s, %s%s)", name_of(c->peer), c->punch ? "打洞" : c->initiator ? "出站" : "入站", c->addr, c->guest ? ", 访客" : "");
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn == i) { G.t[t].backoff = 1000; snprintf(G.t[t].why, sizeof G.t[t].why, "up"); }
     for (int t = 0; t < G.nt; t++) if (G.t[t].conn6 == i) { G.t[t].back6 = 1000; snprintf(G.t[t].why6, sizeof G.t[t].why6, "up"); }
     G.last_up_ms = now_ms();
@@ -312,7 +312,7 @@ static void conn_read(int i)
         static char rq[4097]; size_t rn = c->in.len; memcpy(rq, c->in.p, rn); rq[rn] = 0;
         int fd = c->fd; c->fd = -1;
         conn_close(i, "HTTP");
-        http_take(fd, rq, rn);
+        http_take(fd, rq, rn, c->addr);
         return;
     }
     size_t off = 0;
@@ -331,6 +331,7 @@ static void conn_write(int i)
     if (c->state == C_CONNECTING) {
         int err = p_dial_result(c->fd);
         if (err) { conn_close(i, p_strerr(err)); return; }
+        if (punch_conn_ready(i)) return;
         c->state = C_HS;
         static uint8_t m1[PASSMAX + 512];
         static char pl[PASSMAX + 300]; char edb[48];
@@ -399,6 +400,21 @@ static void dial(int t, int six)
     if (six) tg->conn6 = i; else tg->conn = i;
 }
 
+/* 打洞的一条: 双方同时拨同一对地址, 合成一条 TCP; 公钥小的一方当 Noise 发起方, 另一方连通后转入等握手(punch_conn_ready) */
+int link_punch(int fd, const uint8_t ed[32], const char *addr)
+{
+    member_t *pm = member_by_ed(ed);
+    if (!pm) { p_close(fd); return -1; }
+    int init = memcmp(G.id.ed, ed, 32) < 0;
+    int i = conn_alloc(fd, init);
+    if (i < 0) { p_close(fd); return -1; }
+    conn_t *c = &G.c[i];
+    c->state = C_CONNECTING; c->punch = 1; c->fam = 4; c->pm = pm; memcpy(c->peer, ed, 32);
+    snprintf(c->addr, sizeof c->addr, "%s", addr);
+    if (init) hs_init(&c->hs, 1, G.id.xsec, G.id.x, pm->x);
+    return i;
+}
+
 /* 可达节点接受一条入站链路; fd 也可以由别的程序递进来(中转 8443 上按第一个字节分流后转给我们) */
 static void take_inbound(int fd, const char *addr)
 {
@@ -430,7 +446,7 @@ static void tick(void)
     for (int i = 0; i < MAXC; i++) {
         conn_t *c = &G.c[i];
         if (c->state == C_FREE) continue;
-        if (c->state != C_UP && now - c->born > 8000) { conn_close(i, "连接/握手超时"); continue; }
+        if (c->state != C_UP && now - c->born > (c->punch && c->state == C_CONNECTING ? 3000 : 8000)) { conn_close(i, "连接/握手超时"); continue; }
         if (c->state != C_UP) continue;
         if (c->guest && !c->initiator && wall_ms() / 1000 - PASSSKEW >= c->gp.until) { conn_close(i, "访客通行证到期"); continue; }
         if (c->closing == 3 && now - c->born > 5000) conn_finish(i);    /* 报到链路等不到测试请求: 发完就断 */
@@ -451,6 +467,7 @@ static void tick(void)
     disc_tick();
     disc_pend_tick();
     qual_tick();
+    punch_tick();
     if (!G.relay_off && G.lfd < 0 && now - G.lretry_ms > 30000) { G.lretry_ms = now; relay_sync(); }
     for (int q = 0; q < MAXQ; q++) if (G.q[q].fd > 0 && now - G.q[q].born > 5000) { p_close(G.q[q].fd); G.q[q].fd = 0; }
 }
