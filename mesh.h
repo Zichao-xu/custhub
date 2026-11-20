@@ -102,7 +102,7 @@ typedef struct {
     uint32_t next_sid;
 } conn_t;
 
-enum { F_PING = 1, F_PONG, F_REC, F_TRUST, F_OPEN, F_DATA, F_FIN, F_CLOSE, F_CREDIT, F_PENDQ, F_PENDA, F_PROBE, F_PROBEA };
+enum { F_PING = 1, F_PONG, F_REC, F_TRUST, F_OPEN, F_DATA, F_FIN, F_CLOSE, F_CREDIT, F_PENDQ, F_PENDA, F_PROBE, F_PROBEA, F_WHO, F_WHOA };   /* F_WHO: 你看我是什么地址(查映射, 任何直连的成员都能答) */
 enum { S_FREE, S_FWD, S_INIT, S_RESP };
 typedef struct {
     int kind, conn, pair, fd, up, lfin, rfin;
@@ -236,6 +236,7 @@ int  link_punch(int fd, const uint8_t ed[32], const char *addr);   /* link.c */
 int  conn_new_udp(int us, int init, const uint8_t ed[32], const char *addr);   /* link.c: UDP 链路(KCP 会话 us-1); 发起方给 ed */
 void conn_feed(int i, const uint8_t *b, size_t n);       /* link.c: 链路收到的字节(TCP 读到的 / KCP 交上来的) */
 void punch_udp_reply(const char *from, const char *addr); /* punch.c: UDP 查映射的回答 */
+void punch_who_ans(int from, const char *addr);          /* punch.c: 经已有链路问来的映射(打洞链路 = 打洞端口的映射) */
 /* udp.c */
 void udp_sync(void);
 void udp_io(void);

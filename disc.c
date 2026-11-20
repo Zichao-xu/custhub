@@ -409,9 +409,12 @@ void disc_tick(void)
     int64_t now = now_ms();
     char relays[160] = "", status[320] = "", body[700], b64[48];
     int any_up = 0;
+    for (int m = 0; m < G.trust.n; m++)                  /* 挂在 = 本机所有直连的成员(主动连的、对方连来的、打洞的、UDP): 别人选路时可以经本机中转 */
+        if (memcmp(G.trust.m[m].ed, G.id.ed, 32) && conn_by_peer(G.trust.m[m].ed) >= 0 && strlen(relays) + strlen(G.trust.m[m].name) + 2 < sizeof relays) {
+            any_up = 1; if (relays[0]) strcat(relays, ","); strcat(relays, G.trust.m[m].name);
+        }
     for (int t = 0; t < G.nt; t++) {
         int up = conn_by_peer(G.t[t].ed) >= 0;
-        if (up) { any_up = 1; if (relays[0]) strcat(relays, ","); strncat(relays, G.t[t].name, sizeof relays - strlen(relays) - 1); }
         char why[100]; snprintf(why, sizeof why, "%s", up ? "up" : G.t[t].why); clean(why);
         char item[140]; snprintf(item, sizeof item, "%s%s:%s", status[0] ? "," : "", G.t[t].name, why);
         strncat(status, item, sizeof status - strlen(status) - 1);
@@ -470,7 +473,7 @@ void disc_tick(void)
 #define PNS "custhub-mesh-pending"
 void disc_pendq(int from, const uint8_t *pl, size_t n)
 {
-    if ((!G.me_relay && !me_seed()) || n > 4000) return;   /* 收报到的(可达节点, 或还没自检通过的种子)才有待批准 */
+    if (n > 4000) return;                               /* 每个节点都收报到(新机器连得上谁就找谁), 都有待批准 */
     char t[4096]; memcpy(t, pl, n); t[n] = 0;
     char *nl = strchr(t, '\n');
     long long ts;
@@ -488,7 +491,7 @@ void disc_pendq(int from, const uint8_t *pl, size_t n)
 
 void disc_penda(int from, const uint8_t *pl, size_t n)
 {
-    if (G.pq_fd <= 0 || !G.c[from].peer_relay) return;
+    if (G.pq_fd <= 0 || !G.c[from].pm) return;
     char t[60001]; size_t k = n < 60000 ? n : 60000; memcpy(t, pl, k); t[k] = 0;
     char *sv = NULL;
     for (char *l = m_tok(t, "\n", &sv); l; l = m_tok(NULL, "\n", &sv)) {

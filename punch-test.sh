@@ -47,7 +47,7 @@ ok "/whoami 回请求方的地址:端口" '[ "$(curl -s --local-port $((base+30)
 wait_for 20 grep -q "打洞=127.0.0.1:$QY" <($M ls "$T/x")
 ok "x 收到 y 的打洞端点 127.0.0.1:$QY" '$M ls "$T/x" | grep -q "^  y .*打洞=127.0.0.1:$QY"'
 ok "x 的 ls 有打洞一行" '$M ls "$T/x" | grep -q "^打洞: 127.0.0.1:$QX$"'
-ok "可达的 r 不报打洞端点" '! $M ls "$T/x" | grep -q "^  r .*打洞="'
+ok "可达的 r 不报 TCP 打洞端点(UDP 映射每台都报)" '! $M ls "$T/x" | grep -q "^  r .* 打洞="'
 
 echo "== 2 同时拨: 不可达的两台打洞直连"
 wait_for 40 punched

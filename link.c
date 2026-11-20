@@ -193,6 +193,8 @@ static void on_frame(int i, const uint8_t *f, size_t n)
     case F_PENDA: disc_penda(i, pl, pn); break;
     case F_PROBE: qual_probe_in(i, pl, pn); break;
     case F_PROBEA: qual_probe_ans(i, pl, pn); break;
+    case F_WHO:   conn_send(i, F_WHOA, 0, G.c[i].addr, strlen(G.c[i].addr)); break;   /* 本机看对方是什么地址 */
+    case F_WHOA:  { char a[80]; size_t k = pn < sizeof a - 1 ? pn : sizeof a - 1; memcpy(a, pl, k); a[k] = 0; punch_who_ans(i, a); } break;
     default:      hop_frame(i, type, sid, pl, pn); break;
     }
 }
@@ -262,7 +264,7 @@ static void on_msg(int i, uint8_t *m, size_t n)
             c->state = C_UP; c->closing = 1; c->probe_in = 1; c->pm = pm; memcpy(c->peer, pm->ed, 32);
             return;
         }
-        if (!pm && (G.me_relay || me_seed()) && guest_admit(c, pl, r)) {   /* 种子还没自检通过也收报到 / 访客(转发仍要过自检) */
+        if (!pm && guest_admit(c, pl, r)) {               /* 访客: 连得上哪台就挂哪台(每个节点都接待) */
             static const char GH[] = "custhub-mesh/" MESH_VER " guest";
             long w = hs_write2(&c->hs, (const uint8_t *)GH, sizeof GH - 1, out, &c->tx, &c->rx);
             raw_send(c, out, (size_t)w);
@@ -270,7 +272,6 @@ static void on_msg(int i, uint8_t *m, size_t n)
             return;
         }
         if (!pm) {
-            if (!G.me_relay && !me_seed()) { conn_close(i, "不在名单"); return; }
             /* 名单外节点报到: 记下, 握手做完, 把当前名单发给它, 发完就断(它被批准后拿这份名单就能正式接入) */
             note_pending(c, pl, r);
             long w = hs_write2(&c->hs, (const uint8_t *)HELLO, sizeof HELLO - 1, out, &c->tx, &c->rx);

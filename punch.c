@@ -21,6 +21,14 @@ static int priv(const char *h)
 
 static void q_close(void) { if (Q.fd >= 0) p_close(Q.fd); Q.fd = -1; Q.st = 0; Q.n = 0; }
 
+/* 经已有的打洞链路(本地端口就是打洞端口)问对方看本机是什么地址: 不用可达节点也能查到 TCP 映射 */
+void punch_who_ans(int from, const char *addr)
+{
+    char h[64]; int port;
+    if (from < 0 || from >= MAXC || !G.c[from].punch || hostport(addr, h, sizeof h, &port) || priv(h) || G.r4) return;
+    if (!G.punch[0]) { logf_("打洞端点: %s(经 %s 的打洞链路查到)", addr, name_of(G.c[from].peer)); snprintf(G.punch, sizeof G.punch, "%s", addr); G.mypub_ms = 0; }
+}
+
 static void round_done(int64_t now)
 {
     if (ngot && (ngot == 1 || !strcmp(got[0], got[1]))) {
@@ -69,6 +77,8 @@ static void stun_tick(int64_t now)
         return;
     }
     if (now < next_q && !nask) return;
+    if (!nask) for (int i = 0, k = 0; i < MAXC && k < 2; i++)   /* 每轮也经已有的打洞链路问(任何直连的成员都能答) */
+        if (G.c[i].state == C_UP && G.c[i].punch && !G.c[i].udp) { conn_send(i, F_WHO, 0, NULL, 0); k++; }
     const char *ad = pick(); char h[64], why[96]; int port;
     if (!ad || nask >= 2) { if (nask || ngot) round_done(now); else next_q = now + 5000; return; }   /* 还不知道哪台可达: 5 秒后再看 */
     snprintf(asked[nask++], sizeof asked[0], "%s", ad);
@@ -112,6 +122,12 @@ static void ustun_tick(int64_t now)
         if (!r->relay || addr_fam(r->addr) != 4 || !strcmp(r->addr, "-") || !member_by_ed(r->ed)) continue;
         if (me[0] && strncmp(me, "127.", 4) && !hostport(r->addr, rh, sizeof rh, &rp) && !strcmp(rh, me)) continue;   /* 回环(本机测试)不算 */
         snprintf(ua[nua++], sizeof ua[0], "%s", r->addr);
+    }
+    for (int i = 0; i < MAXC && nua < 8; i++) {          /* UDP 已经打通的任何成员也能答(它那边看到的就是本机 UDP 的映射) */
+        char rh[64]; int rp;
+        if (G.c[i].state != C_UP || !G.c[i].udp || hostport(G.c[i].addr, rh, sizeof rh, &rp) || priv(rh)) continue;
+        int dup = 0; for (int k = 0; k < nua; k++) if (!strcmp(ua[k], G.c[i].addr)) dup = 1;
+        if (!dup) snprintf(ua[nua++], sizeof ua[0], "%s", G.c[i].addr);
     }
     if (!nua) { next_uq = now + 5000; return; }
     for (int k = 0; k < nua; k++) udp_raw(ua[k], "W", 1);

@@ -85,8 +85,14 @@ void ctl_io(int qi)
         }
         if (G.pq_fd > 0) { put_str(fd, "ERR 上一个查询还没完\n"); p_close(fd); return; }
         int n = 0;
-        for (int i = 0; i < MAXC; i++) if (G.c[i].state == C_UP && !G.c[i].closing && G.c[i].peer_relay) { conn_send(i, F_PENDQ, 0, d, (size_t)dn); n++; }
-        if (!n) { put_str(fd, "ERR 没有连着的可达节点\n"); p_close(fd); return; }
+        uint8_t asked[MAXC][32]; int na = 0;                /* 问每个直连的成员(每台问一次): 报到可能落在任何一台 */
+        for (int i = 0; i < MAXC; i++) {
+            if (G.c[i].state != C_UP || G.c[i].closing || !G.c[i].pm || G.c[i].guest) continue;
+            int dup = 0; for (int k = 0; k < na; k++) if (!memcmp(asked[k], G.c[i].peer, 32)) dup = 1;
+            if (dup) continue;
+            memcpy(asked[na++], G.c[i].peer, 32); conn_send(i, F_PENDQ, 0, d, (size_t)dn); n++;
+        }
+        if (!n) { put_str(fd, "ERR 没有连着的成员\n"); p_close(fd); return; }
         G.pq_fd = fd; G.pq_wait = n; G.pq_deadline = now_ms() + 4000; G.pq_out.len = 0;
         return;
     }

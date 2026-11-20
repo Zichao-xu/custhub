@@ -53,14 +53,18 @@ int route(const uint8_t dst[32], const int *avoid, int na)
     int k = conn_by_peer(dst);
     if (k >= 0 && !avoided(k, avoid, na)) return k;
     rec_t *r = rec_by_ed(dst);
-    if (r && strcmp(r->relays, "-")) {
+    if (r && strcmp(r->relays, "-")) {                   /* 对方直连着的成员里, 本机也直连着的: 挑延迟最低的经它转(可不可达都行) */
         char tmp[160], *sv = NULL; snprintf(tmp, sizeof tmp, "%s", r->relays);
+        int best = -1, bs = 0;
         for (char *t = m_tok(tmp, ",", &sv); t; t = m_tok(NULL, ",", &sv)) {
             member_t *m = member_by_name(t);
-            if (!m || !ed_relay(m->ed)) continue;
+            if (!m || !memcmp(m->ed, G.id.ed, 32)) continue;
             int c = conn_by_peer(m->ed);
-            if (c >= 0 && !avoided(c, avoid, na)) return c;
+            if (c < 0 || avoided(c, avoid, na)) continue;
+            int s = G.c[c].rtt ? G.c[c].rtt : 500;
+            if (best < 0 || s < bs) { best = c; bs = s; }
         }
+        if (best >= 0) return best;
     }
     if (!G.me_relay)
         for (int t = 0; t < G.nt; t++) {
@@ -212,7 +216,7 @@ void hop_frame(int i, int type, uint32_t sid, const uint8_t *pl, size_t n)
             }
         }
         int avoid[1] = { i };
-        int r = (!G.me_relay || ttl == 0) ? -1 : route(dst, avoid, 1);
+        int r = ttl == 0 ? -1 : route(dst, avoid, 1);   /* 每个节点都帮转(和两边都直连就行), 不只是可达的 */
         if (r < 0) {
             snprintf(why, sizeof why, ROUTE_ERR " %s 到不了 %s", G.name, name_of(dst));
             conn_send(i, F_CLOSE, sid, why, strlen(why));
