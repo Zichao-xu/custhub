@@ -238,11 +238,23 @@ int targets_resolve(const char *expr, char *out, size_t cap)
     return 0;
 }
 
+/* 按屏幕宽度补空格(中文占 2 格), 超宽的截掉; w = 0 不补不截 */
+static void cell(buf_t *o, const char *s, int w)
+{
+    int used = 0; const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        int n = *p < 0x80 ? 1 : (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : 4, cw = n >= 3 ? 2 : 1;
+        if (w && used + cw > w) break;
+        buf_add(o, p, (size_t)n); used += cw; p += n;
+    }
+    if (w) { buf_add(o, "  ", 1); while (used++ < w) buf_add(o, " ", 1); }
+}
+
 void inventory_text(buf_t *o, int json)
 {
     int64_t now = now_ms(); int first = 1;
     if (json) add(o, "[");
-    else add(o, "%-8s %-4s %-18s %-30s %-9s %-5s %-30s %s\n", "名字", "状态", "机器名", "系统", "版本", "能力", "本机到它", "最近");
+    else { cell(o, "名字", 6); cell(o, "状态", 4); cell(o, "机器名", 16); cell(o, "系统", 30); cell(o, "版本", 7); cell(o, "能力", 4); cell(o, "最近", 9); cell(o, "本机到它", 0); add(o, "\n"); }
     for (int t = 0; t < G.trust.n; t++) {
         member_t *m = &G.trust.m[t];
         int self = !memcmp(m->ed, G.id.ed, 32);
@@ -256,7 +268,7 @@ void inventory_text(buf_t *o, int json)
         int punch = self ? (G.punch[0] || G.upunch[0]) : r && (r->punch[0] || r->upunch[0]);
         const char *addr = self ? (G.r4 ? relay_addr() : "") : r && r->relay ? r->addr : "";
         char link[160] = "";
-        if (c >= 0) snprintf(link, sizeof link, "%s %s%s%dms", G.c[c].udp ? "UDP" : G.c[c].fam == 6 ? "TCP IPv6" : "TCP IPv4", G.c[c].addr, " ", G.c[c].rtt);
+        if (c >= 0) snprintf(link, sizeof link, "%s %dms %s", G.c[c].udp ? "UDP" : G.c[c].fam == 6 ? "TCP IPv6" : "TCP IPv4", G.c[c].rtt, G.c[c].addr);
         else if (!self && online) { int k = route(m->ed, NULL, 0); if (k >= 0) snprintf(link, sizeof link, "经 %s", name_of(G.c[k].peer)); }
         if (json) {
             add(o, "%s{\"name\":", first ? "" : ","); json_str(o, m->name);
@@ -272,8 +284,9 @@ void inventory_text(buf_t *o, int json)
             add(o, "}"); first = 0;
         } else {
             char ag[24]; if (self) snprintf(ag, sizeof ag, "-"); else if (age < 0) snprintf(ag, sizeof ag, "从没见过"); else snprintf(ag, sizeof ag, "%lds 前", age);
-            add(o, "%-8s %-4s %-18.18s %-30.30s %-9s %-5s %-30.30s %s\n", m->name, self ? "本机" : online ? "在线" : "离线", f[1][0] ? f[1] : m->host[0] ? m->host : "-",
-                f[2][0] ? f[2] : "-", ver[0] ? ver : "-", online || self ? cap_of(v4, v6, punch, 0) : "-", self ? "本机" : link[0] ? link : "-", ag);
+            cell(o, m->name, 6); cell(o, self ? "本机" : online ? "在线" : "离线", 4); cell(o, f[1][0] ? f[1] : m->host[0] ? m->host : "-", 16);
+            cell(o, f[2][0] ? f[2] : "-", 30); cell(o, ver[0] ? ver : "-", 7); cell(o, online || self ? cap_of(v4, v6, punch, 0) : "-", 4); cell(o, ag, 9);
+            cell(o, self ? "本机" : link[0] ? link : "-", 0); add(o, "\n");
         }
     }
     if (json) add(o, "]\n");

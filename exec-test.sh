@@ -25,7 +25,7 @@ mkpass "$T/master" "$T/x/pass" "$(cat "$T/x.pub")" all "sh"
 for n in r x y; do $M run "$T/$n" & done
 wait_for 20 sh -c "$M inventory $T/x --json | grep -q '\"name\":\"y\",\"self\":false,\"online\":true'"
 
-echo "== 1 inventory"
+echo "== 1 inventory"; $M inventory "$T/x" | sed "s/^/     /"
 ok "列出所有成员: 本机、在线的、从没见过的(z)" '$M inventory "$T/x" | grep -qE "^x +本机" && $M inventory "$T/x" | grep -qE "^r +在线" && $M inventory "$T/x" | grep -qE "^z +离线 .*从没见过"'
 ok "--json 是合法 JSON, 字段齐(系统、版本、能力、本机到它怎么连)" '$M inventory "$T/x" --json | python3 -c "
 import json,sys; a=json.load(sys.stdin); r=[m for m in a if m[\"name\"]==\"r\"][0]
