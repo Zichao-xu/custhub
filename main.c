@@ -33,7 +33,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -91,7 +91,28 @@ int cmd_mesh(int argc, char **argv)
         for (int k = 0; k < 4; k++) { if (k) { p_sleep_ms(1000); printf("\n"); } if (cmd_ctl(argv[2], l)) return 1; fflush(stdout); }
         return 0;
     }
-    if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");   /* 本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟 */
+    if (argc == 3 && !strcmp(c, "netcheck")) return cmd_ctl(argv[2], "NETCHECK");
+    if ((argc == 4 || argc == 5) && !strcmp(c, "bench")) {   /* 测速: 上传、下载各测几秒(默认 5), 走平常的流(同样的加密、额度、选路) */
+        int secs = argc == 5 ? atoi(argv[4]) : 5; if (secs < 1 || secs > 60) secs = 5;
+        char l[120]; snprintf(l, sizeof l, "PING %s", argv[3]);
+        if (cmd_ctl(argv[2], l)) return 1;
+        static uint8_t z[65536]; memset(z, 0, sizeof z);
+        int fd = ctl_open(argv[2], argv[3], "bench:up");   /* 上传: 往对方灌, 对方收下就扔 */
+        if (fd < 0) return 1;
+        int64_t t0 = now_ms(), sent = 0;
+        while (now_ms() - t0 < (int64_t)secs * 1000) { long w = p_send(fd, z, sizeof z); if (w <= 0) break; sent += w; }
+        double up = sent / ((now_ms() - t0) / 1000.0) / 1048576.0;
+        p_close(fd);
+        char rq[32]; snprintf(rq, sizeof rq, "bench:dn:%d", secs);
+        fd = ctl_open(argv[2], argv[3], rq);               /* 下载: 对方尽力发, 收到底为止 */
+        if (fd < 0) return 1;
+        int64_t got = 0, t1 = 0; long r;
+        while ((r = p_recv(fd, z, sizeof z)) > 0) { if (!t1) t1 = now_ms(); got += r; }
+        double dn = t1 ? got / ((now_ms() - t1) / 1000.0 + 0.001) / 1048576.0 : 0;
+        p_close(fd);
+        printf("上传 %.2f MB/s(%lld MB / %d 秒, 含发送缓冲, 略偏高)\n下载 %.2f MB/s(%lld MB)\n", up, (long long)(sent >> 20), secs, dn, (long long)(got >> 20));
+        return 0;
+    }   /* 本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟 */
     if (argc == 3 && !strcmp(c, "code")) {               /* 本机接入码 */
         snprintf(p, sizeof p, "%s/node.key", argv[2]);
         char code[8];
@@ -138,6 +159,7 @@ int cmd_mesh(int argc, char **argv)
             "  custhub line                               新机器的一行接入命令(从网里一台可达机器 http 下载, Win7 也能装)\n"
             "  custhub ping <名字>                        到这台的各条直连(TCP / UDP)、延迟、现在走哪条\n"
             "  custhub netcheck                           本机网络状况: 入站、UPnP、IPv6、打洞、各直连延迟\n"
+            "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"
             "                                             写 --for 时存成 <人>.pass, 发给对方\n\n"

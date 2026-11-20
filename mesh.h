@@ -281,6 +281,11 @@ int  svc_open(const uint8_t rs[32], const char *req, const char *pass, size_t pl
 /* sh.c: sh 服务 */
 int  sh_accept(char *why, size_t wcap);                  /* 新会话 → 交给连通层的本地 fd */
 void sh_poll_add(pfd_t *p, int *np, int *map);           /* map 编号 3000 起 */
+/* bench.c: 测速服务 */
+int  bench_accept(const char *req, char *why, size_t wcap);
+void bench_poll_add(pfd_t *p, int *np, int *map);        /* map 编号 7000 起 */
+void bench_io(int k, short rev);
+void bench_tick(void);
 void sh_io(int code, short rev);
 void sh_tick(void);
 int  cmd_sh(int argc, char **argv);

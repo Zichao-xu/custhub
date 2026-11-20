@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 诊断和网络变化(本机多进程): custhub ping / netcheck; 心跳测延迟、按延迟选路; 本机网络变了马上重查重连(用 CUSTHUB_NET_SIG_FILE 模拟)
+# 诊断和网络变化(本机多进程): custhub ping / netcheck / bench; 心跳测延迟、按延迟选路; 本机网络变了马上重查重连(用 CUSTHUB_NET_SIG_FILE 模拟)
 set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
@@ -21,6 +21,8 @@ i=0; for n in r x; do i=$((i+1))
 done
 echo "listen 127.0.0.1:$PR" >>"$T/r/conf"; echo "listen 127.0.0.1:$PX" >>"$T/x/conf"
 echo a >"$T/sig"
+. ./testlib.sh
+mkpass "$T/master" "$T/x/pass" "$(cat "$T/x.pub")" all "sh"
 $M run "$T/r" &
 CUSTHUB_NET_SIG_FILE="$T/sig" $M run "$T/x" &
 
@@ -35,7 +37,12 @@ echo "== 2 custhub netcheck"
 ok "netcheck 有入站、UPnP、IPv6、打洞、直连几项" 'o=$($M netcheck "$T/x"); for k in "能力:" "TCP 入站:" "UDP 入站:" "UPnP:" "IPv6:" "TCP 打洞:" "UDP 打洞:" "直连:"; do echo "$o" | grep -q "$k" || exit 1; done'
 ok "netcheck 列出到 r 的直连和延迟" '$M netcheck "$T/x" | grep -qE "^  r +TCP IPv4 [0-9]+ms"'
 
-echo "== 3 网络变了马上重查重连"
+echo "== 3 custhub bench 测速"
+o=$($M bench "$T/x" r 2 2>&1); echo "$o" | sed 's/^/     /'
+ok "bench 测出上传、下载速度(都大于 0)" 'echo "$o" | grep -qE "^上传 [0-9]*[1-9][0-9]*\.[0-9]+ MB/s|^上传 0\.[0-9]*[1-9]" && echo "$o" | grep -qE "^下载 [0-9]*[1-9][0-9]*\.[0-9]+ MB/s|^下载 0\.[0-9]*[1-9]"'
+ok "bench 和 shell 同权限: 没有 shell 通行证的被拒" 'mv "$T/x/pass" "$T/x/pass.off"; ! $M bench "$T/x" r 1 >/dev/null 2>&1; r=$?; mv "$T/x/pass.off" "$T/x/pass"; [ $r = 0 ]'
+
+echo "== 4 网络变了马上重查重连"
 echo b >"$T/sig"
 wait_for 10 grep -q "本机网络变了" "$T/x.log"
 ok "发现网络变了" 'grep -q "本机网络变了" "$T/x.log"'

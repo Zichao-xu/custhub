@@ -36,8 +36,9 @@ int svc_open(const uint8_t rs[32], const char *req, const char *pass, size_t ple
     ed_to_x(P.key, x);
     if (memcmp(x, rs, 32)) { snprintf(why, wcap, "通行证不是发给这台机器的"); goto deny; }
     memcpy(who, P.key, 32);
-    if (pass_allows(&P, P.key, G.id.ed, req, wall_ms() / 1000, why, wcap)) goto deny;
+    if (pass_allows(&P, P.key, G.id.ed, !strncmp(req, "bench:", 6) ? "sh" : req, wall_ms() / 1000, why, wcap)) goto deny;   /* 测速和 shell 同权限 */
     if (!strcmp(req, "sh")) { int fd = sh_accept(why, wcap); if (fd >= 0) return fd; goto deny; }
+    if (!strncmp(req, "bench:", 6)) { int fd = bench_accept(req, why, wcap); if (fd >= 0) return fd; goto deny; }
     if (!strncmp(req, "port:", 5)) {
         char *e; long p = strtol(req + 5, &e, 10);
         if (e != req + 5 && !*e && p > 0 && p <= 65535) {
@@ -68,7 +69,7 @@ int pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap)
         long n = m_read(p, t, sizeof t);
         if (n <= 0 || (size_t)n > cap) continue;
         if (pass_parse(t, (size_t)n, G.master, &P, why, sizeof why)) { if (fk < 0) fk = k; continue; }   /* 验不过的也可能是唯一一张: 交给对方说原因 */
-        if (!pass_allows(&P, G.id.ed, dst, svc, now, why, sizeof why)) { memcpy(buf, t, (size_t)n); return (int)n; }
+        if (!pass_allows(&P, G.id.ed, dst, svc && !strncmp(svc, "bench:", 6) ? "sh" : svc, now, why, sizeof why)) { memcpy(buf, t, (size_t)n); return (int)n; }
         if (fk < 0) fk = k;
     }
     if (fk < 0) return 0;                       /* 没有合适的: 给第一张(对方会说拒绝原因; 取包不要通行证) */
