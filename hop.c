@@ -20,15 +20,18 @@ static int s_alloc(int kind)
 {
     for (int i = 0; i < MAXS; i++) if (G.s[i].kind == S_FREE) {
         memset(&G.s[i], 0, sizeof G.s[i]);
-        G.s[i].kind = kind; G.s[i].fd = -1; G.s[i].pair = -1; G.s[i].conn = -1; G.s[i].credit = WIN;
+        G.s[i].kind = kind; G.s[i].fd = -1; G.s[i].pair = -1; G.s[i].conn = -1; G.s[i].credit = WIN; G.s[i].win = WIN;
         return i;
     }
     return -1;
 }
 
+static long win_extra;                                  /* 所有流比起步多给出去的窗口 */
+
 static void s_free(int si)
 {
     stream_t *s = &G.s[si];
+    if (s->win > WIN) win_extra -= s->win - WIN;
     if (s->fd >= 0) p_close(s->fd);
     buf_free(&s->lout);
     memset(s, 0, sizeof *s);
@@ -275,10 +278,18 @@ void hop_poll_add(pfd_t *p, int *np, int *map)
     }
 }
 
+/* 回额度 = 已经写给本地的字节; 本地这头已经收干净(消费得过来)就再多给一份, 窗口翻倍(到 WINMAX, 总量受 WINBUDGET 管):
+ * 像 TCP 的接收窗口自动调整, 高延迟线路靠它跑满带宽; 旧版本收方不多给, 发方照常, 两边兼容 */
 static void send_credit(stream_t *s)
 {
     if (s->conn < 0) return;
-    uint8_t c[4] = { (uint8_t)(s->unacked >> 24), (uint8_t)(s->unacked >> 16), (uint8_t)(s->unacked >> 8), (uint8_t)s->unacked };
+    long g = s->unacked;
+    if (!s->lout.len && s->win < WINMAX && win_extra < WINBUDGET) {
+        long more = s->win < WINMAX - s->win ? s->win : WINMAX - s->win;
+        if (more > WINBUDGET - win_extra) more = WINBUDGET - win_extra;
+        s->win += more; win_extra += more; g += more;
+    }
+    uint8_t c[4] = { (uint8_t)(g >> 24), (uint8_t)(g >> 16), (uint8_t)(g >> 8), (uint8_t)g };
     conn_send(s->conn, F_CREDIT, s->sid, c, 4);
     s->unacked = 0;
 }

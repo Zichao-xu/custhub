@@ -42,6 +42,13 @@ o=$($M bench "$T/x" r 2 2>&1); echo "$o" | sed 's/^/     /'
 ok "bench 测出上传、下载速度(都大于 0)" 'echo "$o" | grep -qE "^上传 [0-9]*[1-9][0-9]*\.[0-9]+ MB/s|^上传 0\.[0-9]*[1-9]" && echo "$o" | grep -qE "^下载 [0-9]*[1-9][0-9]*\.[0-9]+ MB/s|^下载 0\.[0-9]*[1-9]"'
 ok "bench 和 shell 同权限: 没有 shell 通行证的被拒" 'mv "$T/x/pass" "$T/x/pass.off"; ! $M bench "$T/x" r 1 >/dev/null 2>&1; r=$?; mv "$T/x/pass.off" "$T/x/pass"; [ $r = 0 ]'
 
+echo "== 3b 高延迟线路: 窗口自动长大(回环加 25ms 单程延迟 = 来回 50ms; 固定 256KB 窗口最多约 5 MB/s)"
+if command -v tc >/dev/null && tc qdisc add dev lo root netem delay 25ms 2>/dev/null; then
+  sleep 6; o=$($M bench "$T/x" r 4 2>&1); tc qdisc del dev lo root 2>/dev/null; echo "$o" | grep -E "上传|下载" | sed 's/^/     /'
+  dn=$(echo "$o" | sed -n 's/^下载 \([0-9.]*\) MB.*/\1/p')
+  ok "来回 50ms 时下载超过固定窗口的上限(> 10 MB/s, 实测 $dn)" 'awk -v d="$dn" "BEGIN{exit !(d > 10)}"'
+else echo "  (没有 tc / netem, 跳过)"; fi
+
 echo "== 4 网络变了马上重查重连"
 echo b >"$T/sig"
 wait_for 10 grep -q "本机网络变了" "$T/x.log"

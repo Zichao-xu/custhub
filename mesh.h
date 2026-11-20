@@ -19,7 +19,9 @@
 #define MAXTEXT   (32 * 1024)    /* 名单文件 */
 #define MAXMSG    65535          /* 一条 Noise 消息 */
 #define CHUNK     16000          /* 一个 DATA 帧最多带的明文 */
-#define WIN       (256 * 1024)   /* 每条流每个方向的在途额度(明文字节) */
+#define WIN       (256 * 1024)   /* 每条流每个方向起步的在途额度(明文字节) */
+#define WINMAX    (8 * 1024 * 1024)   /* 收方把窗口长到的上限(高延迟线路: 延迟 x 带宽) */
+#define WINBUDGET (64L * 1024 * 1024) /* 所有流多给的窗口加起来的上限(防内存撑爆) */
 #define OUTMAX    (1024 * 1024)  /* 链路发送缓冲超过这个就先不读本地数据 */
 #define OUTDROP   (32 * 1024 * 1024)
 
@@ -112,6 +114,7 @@ typedef struct {
     hs_t hs; cs_t tx, rx;
     buf_t lout;                   /* 待写给本地连接 */
     long credit, unacked;         /* 还能发多少 / 已写给本地还没回额度的 */
+    long win;                     /* 本机给对方的窗口(收方): 从 WIN 起, 本地消费得过来就翻倍, 最大 WINMAX */
     int tried[8], ntried;
 } stream_t;
 
