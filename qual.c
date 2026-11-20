@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 测不了的成员(在它那边看本机是局域网地址, 比如走了隧道): 一段时间内不再请它测 */
+static struct { uint8_t ed[32]; int64_t until; } SK[16];
+static int skipped(const uint8_t ed[32]) { int64_t now = now_ms(); for (int k = 0; k < 16; k++) if (SK[k].until > now && !memcmp(SK[k].ed, ed, 32)) return 1; return 0; }
+static void skip_add(const uint8_t ed[32]) { int k = 0; while (k < 15 && SK[k].until > now_ms()) k++; memcpy(SK[k].ed, ed, 32); SK[k].until = now_ms() + 600000; }
+
 static int64_t env_s(const char *k, long def)
 {
     const char *e = getenv(k);
@@ -106,7 +111,7 @@ void qual_tick(void)
         int best = -1;
         for (int i = 0; i < MAXC; i++) {
             conn_t *c = &G.c[i];
-            if (c->state != C_UP || c->closing || c->probe_for || c->probe_in || c->guest || (c->fam == 6 && !G.announce[0])) continue;
+            if (c->state != C_UP || c->closing || c->probe_for || c->probe_in || c->guest || c->udp || (c->fam == 6 && !G.announce[0]) || skipped(c->peer)) continue;
             unsigned a = 0, b = 0;                         /* 经局域网地址连着的: 对方看到的是本机局域网地址, 测出来不算数 */
             if (!G.announce[0] && sscanf(c->addr, "%u.%u", &a, &b) == 2 && (a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128))) continue;
             if (best < 0 || (c->peer_relay && !G.c[best].peer_relay)) best = i;
@@ -145,6 +150,11 @@ void qual_probe_ans(int from, const uint8_t *pl, size_t n)
     char t[160]; memcpy(t, pl, n); t[n] = 0;
     int64_t now = now_ms();
     G.probing = 0;
+    if (!strncmp(t, "skip ", 5)) {                       /* 对方测不了(在它那边看本机是局域网地址): 不算不通, 马上换一台 */
+        if (from >= 0 && from < MAXC) skip_add(G.c[from].peer);
+        if (G.probe_fam == 6) G.probe6_next = now; else G.probe_next = now;
+        return;
+    }
     if (G.probe_fam == 6) {
         char m[200];
         if (!strncmp(t, "ok ", 3) && addr_fam(t + 3) == 6) {
@@ -202,6 +212,11 @@ void qual_probe_in(int from, const uint8_t *pl, size_t n)
     if (strchr(t, ':')) snprintf(addr, sizeof addr, "%s", t);   /* 对方指定了整个地址(announce) */
     else {                                                     /* 用本机看到的对方 IP + 它的监听端口 */
         if (hostport(G.c[from].addr, host, sizeof host, &port)) return;
+        unsigned a = 0, b = 0;                         /* 本机看对方是局域网地址(同一局域网 / 走了隧道): 测出来的不是它的公网入口, 叫它换一台 */
+        if (sscanf(host, "%u.%u", &a, &b) == 2 && (a == 10 || (a == 172 && b >= 16 && b < 32) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b < 128))) {
+            char m[120]; snprintf(m, sizeof m, "skip 在我这边看你是局域网地址 %s", host);
+            conn_send(from, F_PROBEA, 0, m, strlen(m)); return;
+        }
         int p = atoi(t);
         if (p <= 0 || p > 65535) return;
         snprintf(addr, sizeof addr, strchr(host, ':') ? "[%s]:%d" : "%s:%d", host, p);
