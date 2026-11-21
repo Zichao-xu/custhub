@@ -95,6 +95,8 @@ echo "master $(cut -d' ' -f1,2 "$T/master.pub")" >"$T/allowed"
 ssh-keygen -Y verify -f "$T/allowed" -I master -n custhub-pass -s "$T/pbody.sig" <"$T/pbody" >/dev/null 2>&1 && ok "ssh-keygen -Y verify 也认(格式兼容)" || ng "ssh-keygen 不认签出来的通行证"
 $M key --dir "$D" pass --for "$A" --to b --svc "port:*" --hours 0.5 --out - >"$T/pa" 2>/dev/null && chk ok "--for 别人(公钥): 打印到标准输出" "$T/pa" "$A" "$B" port:80 $NOWR || ng "--for 签发失败"
 chk 已过期 "--hours 0.5 生效"                 "$T/pa" "$A" "$B" port:80 $((NOWR + 1800 + 301))
+$M key --dir "$D" pass --for "$A" --to b --svc "file info" --out "$T/pf" 2>/dev/null && chk ok "--svc file info: 只给传文件、只读查看" "$T/pf" "$A" "$B" file $NOWR || ng "--svc file info 签不出来"
+chk 这项服务 "file info 不含 sh"                "$T/pf" "$A" "$B" sh $NOWR
 mkdir -p "$T/g0"; G=$($M keygen "$T/g0")
 $M key --dir "$D" pass --for "$G" --to a --svc sh --out "$T/pg" 2>/dev/null && chk ok "--for 名单外的公钥(访客)" "$T/pg" "$G" "$A" sh $NOWR || ng "给访客签发失败"
 o=$($M key --dir "$D" pass --to a --svc sh --hours 25 2>&1);  echo "$o" | grep -q "最长 1 天" && ok "--hours 25 被拒" || ng "--hours 25 没拒: $o"

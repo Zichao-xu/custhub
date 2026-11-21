@@ -1,7 +1,7 @@
 /* 控制面: 签发通行证(design-v3 §0 第 11 条)。持主钥匙的一方用; 私钥只在 ssh-agent 里, 本程序只问它要一个签名
  *   mesh pass <目录> --to all|名字或公钥,… --svc "sh port:22,3389" [--for 名字|公钥] [--hours N] [--out 文件]
  *     --to    能进哪些机器(名单里的名字, 或节点公钥)
- *     --svc   能用哪些服务: sh  port:*  port:22,3389(空格分开)
+ *     --svc   能用哪些服务: sh(终端、跑命令、测速, 也含 file 和 info)  file(传文件)  info(只读看网络状况和日志)  port:*  port:22,3389(空格分开)
  *     --for   发给谁; 不写 = 本机节点自己, 直接写进 <目录>/pass。名单外的机器(访客)只能写公钥
  *     --hours 有效期小时数, 默认 2, 最长 24; 从现在起算(生效时间往前放 1 分钟, 免得对方时钟略快)
  *     --out   写到文件(否则 --for 别人时打印到标准输出)
@@ -33,7 +33,7 @@ static int ok_svc(const char *s)
     char b[200]; snprintf(b, sizeof b, "%s", s);
     char *sv = NULL; int n = 0;
     for (char *t = m_tok(b, " ", &sv); t; t = m_tok(NULL, " ", &sv), n++) {
-        if (!strcmp(t, "sh") || !strcmp(t, "port:*")) continue;
+        if (!strcmp(t, "sh") || !strcmp(t, "file") || !strcmp(t, "info") || !strcmp(t, "port:*")) continue;
         if (strncmp(t, "port:", 5) || !t[5]) return 0;
         for (const char *c = t + 5; *c; c++) if (!((*c >= '0' && *c <= '9') || *c == ',')) return 0;
     }
@@ -54,14 +54,14 @@ int cmd_pass(int argc, char **argv)
         else { dir = NULL; break; }
     }
     if (!dir || !to) {
-        fprintf(stderr, "用法: custhub key pass --to all|机器,… [--svc \"sh port:22\"(默认 sh)] [--for 名字|公钥] [--hours N(默认 2)] [--out 文件|-]\n"
+        fprintf(stderr, "用法: custhub key pass --to all|机器,… [--svc \"sh file info port:22\"(默认 sh)] [--for 名字|公钥] [--hours N(默认 2)] [--out 文件|-]\n"
                         "  不写 --for: 给本机, 直接生效; 写 --for: 存成 <名字>.pass, 发给对方, 对方 custhub pass <文件> 装上\n");
         return 2;
     }
     G.quiet = 1;
     if (mesh_conf_load(dir)) { fprintf(stderr, "读不了 %s 的节点配置(要有 node.key、conf 里的 master、trust)\n", dir); return 2; }
     if (hours <= 0 || hours > 24) { fprintf(stderr, "--hours 要在 0~24 之间(通行证最长 1 天)\n"); return 2; }
-    if (!ok_svc(svc)) { fprintf(stderr, "--svc 不对: 只认 sh、port:*、port:22,3389 这几种写法\n"); return 2; }
+    if (!ok_svc(svc)) { fprintf(stderr, "--svc 不对: 只认 sh、file、info、port:*、port:22,3389(空格分开)\n"); return 2; }
 
     uint8_t who[32]; char whob[48];
     if (!forw) memcpy(who, G.id.ed, 32);

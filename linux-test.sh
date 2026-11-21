@@ -10,9 +10,12 @@ if [ "${1:-}" != inside ]; then
 fi
 shift
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null && apt-get install -y -qq gcc libc6-dev python3 openssh-client perl procps curl sudo iproute2 iptables >/dev/null 2>&1
+for k in 1 2 3; do                                     # 装依赖: 网络偶尔抽风, 重试; 都不行就说清楚再退出
+  apt-get update -qq >/tmp/apt.log 2>&1 && apt-get install -y -qq gcc libc6-dev python3 openssh-client perl procps curl sudo iproute2 iptables >>/tmp/apt.log 2>&1 && break
+  [ $k = 3 ] && { echo "容器里装依赖失败(网络?):"; tail -5 /tmp/apt.log; exit 1; }; sleep 5
+done
 mkdir -p /w && cp -r /src /w/mesh && cd /w/mesh && rm -f mesh
-CC=gcc ./build.sh 2>/tmp/build.err; grep -c "warning:" /tmp/build.err | sed "s/^/gcc 警告: /"; grep "warning:" /tmp/build.err | sed "s/^/  /"
+CC=gcc ./build.sh 2>/tmp/build.err || { echo "编译失败:"; grep -A3 "error" /tmp/build.err | head -20; exit 1; }; grep -c "warning:" /tmp/build.err | sed "s/^/gcc 警告: /"; grep "warning:" /tmp/build.err | sed "s/^/  /"
 # 并行跑(每套用随机端口、各自的临时目录, 互不干扰); 改全局设置的几套单独跑: net-test(回环加延迟) punch-test(防火墙丢 RST) group-test(装到 /opt、建用户组)
 # 系统自动分配的临时端口挪到 50000 以上(上面 docker --sysctl), 各套监听用的 20000~41000 不会被别的连接先占掉
 SERIAL=" net-test punch-test group-test "

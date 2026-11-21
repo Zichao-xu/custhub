@@ -6,7 +6,7 @@
  *   custhub-pass v1
  *   key   <发起方节点公钥 base64>
  *   to    all | <节点公钥 base64> ...
- *   svc   sh port:* port:22,3389        (任意组合, 空格分开)
+ *   svc   sh file info port:* port:22,3389        (任意组合, 空格分开)
  *   from  2026-11-19T18:00:00Z           (UTC)
  *   until 2026-11-19T20:00:00Z           (until - from 不超过 1 天)
  *   --end--

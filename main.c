@@ -210,7 +210,7 @@ int cmd_mesh(int argc, char **argv)
             "  custhub alerts on|off|status                这台电脑、当前用户: 登录时自动后台看着, 有问题弹通知\n"
             "  custhub wait <名字> <online|offline|reachable|direct|version 版本> [--timeout 秒]   等到条件成立(返回 0), 超时返回 4\n"
             "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
-            "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"
+            "  custhub key pass --to <机器,…> [--for <人>] [--svc \"sh file info port:N\"] [--hours 2]\n"
             "                                             签通行证; 不写 --for 是给自己, 直接生效\n"
             "                                             写 --for 时存成 <人>.pass, 发给对方\n\n"
             "其他\n"
