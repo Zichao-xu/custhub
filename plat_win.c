@@ -203,7 +203,57 @@ int64_t p_fsize(const char *path)
     if (!ok || (a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
     return (int64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow;
 }
-void p_notify(const char *title, const char *msg) { (void)title; (void)msg; }
+void b64_encode(const uint8_t *in, size_t n, char *out);
+/* Windows 10/11 系统通知: 用系统自带的 PowerShell(借它的应用身份)弹一条; 脚本走 -EncodedCommand, 中文、引号都不用转义; Win7 没有, 不弹 */
+void p_notify(const char *title, const char *msg)
+{
+    if (WINMOD.con_write) return;                        /* Win7 模块: 没有系统通知 */
+    char t[300], m[600]; size_t k = 0;
+    for (const char *c = title; *c && k < sizeof t - 2; c++) { if (*c == '\'') t[k++] = '\''; t[k++] = *c; } t[k] = 0; k = 0;
+    for (const char *c = msg; *c && k < sizeof m - 2; c++) { if (*c == '\'') m[k++] = '\''; m[k++] = *c; } m[k] = 0;
+    char s[2400];
+    snprintf(s, sizeof s,
+        "$a='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
+        "[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null;"
+        "$x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+        "$e=$x.GetElementsByTagName('text');$e.Item(0).AppendChild($x.CreateTextNode('%s'))|Out-Null;$e.Item(1).AppendChild($x.CreateTextNode('%s'))|Out-Null;"
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($a).Show([Windows.UI.Notifications.ToastNotification]::new($x))", t, m);
+    WCHAR *w = wide(s);
+    if (!w) return;
+    size_t wl = wcslen(w) * 2;
+    char *enc = malloc(wl * 4 / 3 + 8);
+    if (enc) {
+        b64_encode((const uint8_t *)w, wl, enc);
+        const char *av[] = { "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", enc, NULL };
+        char o[256]; p_run(av, o, sizeof o, 20);
+        free(enc);
+    }
+    free(w);
+}
+
+void p_hide_console(void) { HWND h = GetConsoleWindow(); if (h) ShowWindow(h, SW_HIDE); }
+
+int p_autostart_on(const char *name)
+{
+    char tn[80], o[512]; snprintf(tn, sizeof tn, "custhub-%s", name);
+    const char *av[] = { "schtasks", "/query", "/tn", tn, NULL };
+    return p_run(av, o, sizeof o, 20) == 0;
+}
+
+int p_autostart(const char *name, int on, const char *args, char *why, size_t wcap)
+{
+    char tn[80], self[1200], tr[1600], o[1024]; snprintf(tn, sizeof tn, "custhub-%s", name);
+    const char *end[] = { "schtasks", "/end", "/tn", tn, NULL }, *del[] = { "schtasks", "/delete", "/tn", tn, "/f", NULL };
+    p_run(end, o, sizeof o, 20); p_run(del, o, sizeof o, 20);
+    if (!on) return 0;
+    if (p_self_path(self, sizeof self)) { snprintf(why, wcap, "找不到本程序的路径"); return -1; }
+    snprintf(tr, sizeof tr, "\"%s\" %s", self, args);
+    const char *mk[] = { "schtasks", "/create", "/tn", tn, "/sc", "onlogon", "/rl", "limited", "/tr", tr, "/f", NULL };   /* 当前用户登录时 */
+    if (p_run(mk, o, sizeof o, 30)) { snprintf(why, wcap, "建不了登录任务: %.160s", o); return -1; }
+    const char *run[] = { "schtasks", "/run", "/tn", tn, NULL };
+    p_run(run, o, sizeof o, 20);
+    return 0;
+}
 int p_stderr_tty(void) { DWORD m; return GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), &m) != 0; }
 int p_isdir(const char *path) { WCHAR *p = wide(path); DWORD a = p ? GetFileAttributesW(p) : INVALID_FILE_ATTRIBUTES; free(p); return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY); }
 int p_remove(const char *path) { WCHAR *p = wide(path); int r = p ? _wremove(p) : -1; free(p); return r; }

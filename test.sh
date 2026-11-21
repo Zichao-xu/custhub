@@ -15,7 +15,7 @@ T=$(mktemp -d); trap 'kill $(jobs -p) ${SSH_AGENT_PID:-} 2>/dev/null; wait 2>/de
 pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
-base=$((20000 + RANDOM % 20000))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}
 P1=$base P2=$((base+1)) P1B=$((base+2)) P1C=$((base+3)) P2C=$((base+4)) ECHO=$((base+5))
 
 ssh-keygen -q -t ed25519 -N '' -C master -f "$T/master"

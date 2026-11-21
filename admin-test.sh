@@ -13,7 +13,7 @@ pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base
 PH="umbra quill tundra jasper mosaic ripple falcon ember cobalt meadow lantern pivot"
 eval "$(ssh-agent -s)" >/dev/null
 CUSTHUB_PASSPHRASE="$PH" $M masterpub >"$T/master.pub"

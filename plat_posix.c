@@ -210,6 +210,59 @@ void *p_fopen(const char *path, const char *mode) { return fopen(path, mode); }
 int p_fseek64(void *f, int64_t off) { return fseeko((FILE *)f, (off_t)off, SEEK_SET) ? -1 : 0; }
 int64_t p_fsize(const char *path) { struct stat st; return !stat(path, &st) && S_ISREG(st.st_mode) ? (int64_t)st.st_size : -1; }
 int p_stderr_tty(void) { return isatty(2); }
+void p_hide_console(void) { }
+
+static int as_write(const char *p, const char *t, size_t n)
+{
+    FILE *f = fopen(p, "wb");
+    if (!f) return -1;
+    int ok = fwrite(t, 1, n, f) == n;
+    return fclose(f) || !ok ? -1 : 0;
+}
+
+static void as_path(const char *name, char *p, size_t cap)
+{
+    const char *h = getenv("HOME") ? getenv("HOME") : "";
+#ifdef __APPLE__
+    snprintf(p, cap, "%s/Library/LaunchAgents/com.custhub.%s.plist", h, name);
+#else
+    snprintf(p, cap, "%s/.config/autostart/custhub-%s.desktop", h, name);
+#endif
+}
+
+int p_autostart_on(const char *name) { char p[1100]; as_path(name, p, sizeof p); return access(p, F_OK) == 0; }
+
+int p_autostart(const char *name, int on, const char *args, char *why, size_t wcap)
+{
+    char p[1100], self[1200], cmd[2600], t[3000]; as_path(name, p, sizeof p);
+    if (p_self_path(self, sizeof self)) { snprintf(why, wcap, "找不到本程序的路径"); return -1; }
+#ifdef __APPLE__
+    snprintf(cmd, sizeof cmd, "launchctl unload -w '%s' >/dev/null 2>&1", p);
+    if (system(cmd)) { /* 原来没装: 不要紧 */ }
+    if (!on) { remove(p); return 0; }
+    char d[1100]; snprintf(d, sizeof d, "%s/Library/LaunchAgents", getenv("HOME") ? getenv("HOME") : ""); mkdir(d, 0755);
+    char argx[1200] = ""; size_t al = 0; char a2[400]; snprintf(a2, sizeof a2, "%s", args);
+    for (char *sv = NULL, *w = strtok_r(a2, " ", &sv); w; w = strtok_r(NULL, " ", &sv)) al += (size_t)snprintf(argx + al, sizeof argx - al, "<string>%s</string>", w);
+    int n = snprintf(t, sizeof t, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                     "<plist version=\"1.0\"><dict><key>Label</key><string>com.custhub.%s</string><key>ProgramArguments</key><array><string>%s</string>%s</array>"
+                     "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ProcessType</key><string>Background</string></dict></plist>\n", name, self, argx);
+    if (as_write(p, t, (size_t)n)) { snprintf(why, wcap, "写不了 %s", p); return -1; }
+    snprintf(cmd, sizeof cmd, "launchctl load -w '%s' >/dev/null 2>&1", p);
+    if (system(cmd)) { snprintf(why, wcap, "launchctl 没装上"); return -1; }
+    return 0;
+#else
+    snprintf(cmd, sizeof cmd, "pkill -f '%s %s' >/dev/null 2>&1", self, args);
+    if (system(cmd)) { /* 没在跑 */ }
+    if (!on) { remove(p); return 0; }
+    char d[1100]; snprintf(d, sizeof d, "%s/.config", getenv("HOME") ? getenv("HOME") : ""); mkdir(d, 0755);
+    snprintf(d, sizeof d, "%s/.config/autostart", getenv("HOME") ? getenv("HOME") : ""); mkdir(d, 0755);
+    int n = snprintf(t, sizeof t, "[Desktop Entry]\nType=Application\nName=custhub %s\nExec=%s %s\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n", name, self, args);
+    if (as_write(p, t, (size_t)n)) { snprintf(why, wcap, "写不了 %s", p); return -1; }
+    snprintf(cmd, sizeof cmd, "nohup '%s' %s >/dev/null 2>&1 &", self, args);   /* 这次登录也马上起来 */
+    if (system(cmd)) { snprintf(why, wcap, "起不来"); return -1; }
+    return 0;
+#endif
+}
 void p_notify(const char *title, const char *msg)
 {
     char t[200], m[400], cmd[800]; size_t k = 0;   /* 去掉引号和反斜杠, 免得拼命令出问题 */

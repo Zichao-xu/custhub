@@ -58,6 +58,7 @@ custhub pull <本机路径> <名字> <对方文件>     # 本机路径是目录�
   例: 发版后 `custhub wait A-2 version 0.3.48 --timeout 600`
 - `custhub watch --json`: 持续输出事件, 每行 `{id, time, name, type, from, to}`;
   type: `online` `offline` `offline_long`(离线满 10 分钟) `version` `capability` `link`(direct/relay/none) `behind`(版本落后满 30 分钟)
+- `custhub alerts on|off|status`: 这台电脑、当前用户登录时自动后台看着, 有问题弹系统通知(改的是人的电脑配置, **先问人**)
 
 ## 常见情况
 - `exec` 某台 `✘ 名单里没有…` / 分组不认识: 用 `inventory` 看名字

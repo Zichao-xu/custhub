@@ -11,7 +11,7 @@ M=$PWD/mesh
 T=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEEP:-}" ] && echo "现场: $T" || rm -rf "$T"' EXIT
 pass=0; fail=0
 ok(){ if eval "$2"; then pass=$((pass+1)); echo "  ✔ $1"; else fail=$((fail+1)); echo "  ✘ $1"; fi; }
-base=$((20000 + RANDOM % 20000)); PR=$base PB=$((base+1)) ECHO=$((base+2)) PC=$((base+3)) PD=$((base+4))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base PB=$((base+1)) ECHO=$((base+2)) PC=$((base+3)) PD=$((base+4))
 export CUSTHUB_MESH_PENDING_S=3 CUSTHUB_MESH_OBS_S=6      # 观察期缩到 6 秒
 
 ssh-keygen -q -t ed25519 -N '' -C master -f "$T/master"; ssh-keygen -q -t ed25519 -N '' -C evil -f "$T/evil"

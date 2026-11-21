@@ -14,7 +14,7 @@ pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base
 CP=$((base+20)); export CUSTHUB_HOME=$T/home CUSTHUB_SVC_DRY=1 CUSTHUB_MESH_PENDING_S=2 CUSTHUB_CTL=127.0.0.1:$CP CP   # 控制口避开本机真在跑的 7481
 ssh-keygen -q -t ed25519 -N '' -C master -f "$T/master"
 mkdir -p "$T/r"; $M keygen "$T/r" >"$T/r.pub"

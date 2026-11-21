@@ -9,7 +9,7 @@ T=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEE
 pass=0; fail=0
 ok(){ if eval "$2"; then pass=$((pass+1)); echo "  ✔ $1"; else fail=$((fail+1)); echo "  ✘ $1"; fi; }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base PX=$((base+1)) PY=$((base+2)) ECHO=$((base+3))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base PX=$((base+1)) PY=$((base+2)) ECHO=$((base+3))
 export CUSTHUB_MESH_OBS_S=3600 CUSTHUB_IP6=
 LAN=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -E '^(10|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.' | head -1)
 [ -n "$LAN" ] || { echo "  (本机没有局域网 IPv4, 跳过)"; echo "== 结果: 通过 0, 失败 0"; exit 0; }

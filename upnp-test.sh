@@ -14,7 +14,7 @@ pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base PD=$((base+1)) PN=$((base+2)) SSDP=$((base+3)) HTTP=$((base+4))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base PD=$((base+1)) PN=$((base+2)) SSDP=$((base+3)) HTTP=$((base+4))
 
 python3 - "$SSDP" "$HTTP" >"$T/router.log" 2>&1 <<'PY' &
 import socket, sys, threading, re, http.server

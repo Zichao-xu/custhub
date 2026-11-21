@@ -6,6 +6,7 @@
 # 核心只用 C99 + 平台模块(design-v3 §0): POSIX 目标链 plat_posix.c, Windows 链 plat_win.c; 密码学只用 vendor/ 里的 Monocypher 4.0.2
 set -euo pipefail
 cd "$(dirname "$0")"
+[ -n "${CUSTHUB_PREBUILT:-}" ] && [ "${1:-}" != release ] && [ -z "${OUT:-}${VER:-}${PLAT:-}" ] && [ -x mesh ] && exit 0   # 并行测试: 容器里已经编好一份, 各套别再编(同时写同一个文件会坏)
 CORE=(main.c util.c b64.c noise.c link.c hop.c disc.c qual.c punch.c udp.c bench.c file.c exec.c info.c events.c upnp.c app.c pass.c svc.c rel.c join.c kdf.c sh.c sig.c key.c sshsig.c tui.c
       vendor/monocypher.c vendor/monocypher-ed25519.c vendor/ikcp.c)
 CF=(-std=c99 -Wall -Wextra -Wno-unused-parameter)

@@ -7,7 +7,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
 M=$PWD/mesh
-base=$((20000 + RANDOM % 20000)); PR=$base PX=$((base+1)) PY=$((base+2)) ECHO=$((base+3)) QX=$((base+11)) QY=$((base+12))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base PX=$((base+1)) PY=$((base+2)) ECHO=$((base+3)) QX=$((base+11)) QY=$((base+12))
 rules(){ for p in $QX $QY; do iptables "$1" OUTPUT -o lo -p tcp --sport $p --tcp-flags RST RST -j DROP 2>/dev/null || return 1; done; }
 command -v iptables >/dev/null && rules -I || { echo "  (没有 iptables 或没权限, 跳过)"; echo "== 结果: 通过 0, 失败 0"; exit 0; }
 T=$(mktemp -d); trap 'rules -D; kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEEP:-}" ] && echo "现场: $T" || rm -rf "$T"' EXIT

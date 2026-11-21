@@ -14,7 +14,7 @@ pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base GH=$((base+1))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base GH=$((base+1))
 mkdir -p "$T/gh"
 for v in 0.0.1 0.0.2 0.0.3 0.0.5; do OUT=$T/m-$v-t1 VER=$v PLAT=t1 ./build.sh >/dev/null || exit 1; done
 OUT=$T/m-0.0.2-t2 VER=0.0.2 PLAT=t2 ./build.sh >/dev/null || exit 1

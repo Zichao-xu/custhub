@@ -16,7 +16,7 @@ zig cc -target x86_64-windows-gnu -std=c99 -O2 -Wall -Wextra -Wno-unused-paramet
 rm -f "$B"/*.pdb
 ssh-keygen -q -t ed25519 -N '' -C master -f "$B/master"
 for n in r e b; do mkdir -p "$B/$n"; $M keygen "$B/$n" >"$B/$n.pub"; done
-base=$((20000 + RANDOM % 20000))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}
 { echo "custhub-mesh-trust 1"; echo "relay r $(cat "$B/r.pub") 127.0.0.1:$base"; echo "node e $(cat "$B/e.pub")"; echo "node b $(cat "$B/b.pub")"; echo "--end--"; } >"$B/data"
 ssh-keygen -q -Y sign -f "$B/master" -n custhub-mesh-trust "$B/data" 2>/dev/null; cat "$B/data" "$B/data.sig" >"$B/trust"
 i=0; for n in r e b; do i=$((i+1))

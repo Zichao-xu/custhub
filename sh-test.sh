@@ -14,7 +14,7 @@ pass=0; fail=0
 ok(){ echo "  ✔ $*"; pass=$((pass+1)); }
 ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 t30(){ perl -e 'alarm shift; exec @ARGV' 30 "$@"; }
-base=$((20000 + RANDOM % 20000)); PR=$base
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base
 
 ssh-keygen -q -t ed25519 -N '' -C master -f "$T/master"
 eval "$(ssh-agent -s)" >/dev/null; ssh-add -q "$T/master" 2>/dev/null

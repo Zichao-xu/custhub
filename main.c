@@ -39,7 +39,7 @@ int cmd_mesh(int argc, char **argv)
     const char *c = argc > 1 ? argv[1] : "";
     /* sh / connect / ls / code 的节点目录可以省: 第一个参数不是节点目录就用默认的(用户模式装过就用它) */
     static char *av2[64];
-    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull") || !strcmp(c, "inventory") || !strcmp(c, "exec") || !strcmp(c, "log") || !strcmp(c, "watch") || !strcmp(c, "wait")) &&
+    if (argc >= 2 && argc < 62 && (!strcmp(c, "sh") || !strcmp(c, "connect") || !strcmp(c, "ls") || !strcmp(c, "code") || !strcmp(c, "line") || !strcmp(c, "ping") || !strcmp(c, "netcheck") || !strcmp(c, "bench") || !strcmp(c, "send") || !strcmp(c, "pull") || !strcmp(c, "inventory") || !strcmp(c, "exec") || !strcmp(c, "log") || !strcmp(c, "watch") || !strcmp(c, "wait") || !strcmp(c, "alerts")) &&
         (argc == 2 || !is_node_dir(argv[2]))) {
         av2[0] = argv[0]; av2[1] = argv[1]; av2[2] = (char *)node_default();
         for (int i = 2; i < argc; i++) av2[i + 1] = argv[i];
@@ -118,6 +118,7 @@ int cmd_mesh(int argc, char **argv)
     }
     if (argc == 3 && !strcmp(c, "inventory")) return cmd_ctl(argv[2], JSON ? "INV json" : "INV");   /* 所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连) */
     if (argc >= 4 && !strcmp(c, "exec")) return cmd_exec(argc - 2, argv + 2);
+    if (argc == 4 && !strcmp(c, "alerts")) return cmd_alerts(argv[2], argv[3]);   /* custhub alerts on|off|status */
     if (argc >= 3 && !strcmp(c, "watch")) {              /* custhub watch [--json] [--notify] */
         int nt = 0; for (int k = 3; k < argc; k++) { if (!strcmp(argv[k], "--notify")) nt = 1; else { fprintf(stderr, "用法: custhub watch [--json] [--notify]\n"); return 2; } }
         return cmd_watch(argv[2], JSON, nt);
@@ -206,6 +207,7 @@ int cmd_mesh(int argc, char **argv)
             "  custhub netcheck <名字>                     看别的机器的网络状况(只读; 要 info 或 sh 通行证)\n"
             "  custhub log [名字] [--grep 关键字] [--lines 行数]   看日志(不给名字 = 本机; 别的机器要 info 或 sh 通行证)\n"
             "  custhub watch [--json] [--notify]           持续看事件(上线、离线、版本、能力、直连); --notify 离线太久、版本卡住、能力变差时弹通知\n"
+            "  custhub alerts on|off|status                这台电脑、当前用户: 登录时自动后台看着, 有问题弹通知\n"
             "  custhub wait <名字> <online|offline|reachable|direct|version 版本> [--timeout 秒]   等到条件成立(返回 0), 超时返回 4\n"
             "  custhub bench <名字> [秒]                  到这台的上传 / 下载速度(要有它的 shell 通行证; 默认各 5 秒)\n"
             "  custhub key pass --to <机器,…> [--for <人>] [--svc sh] [--hours 2]\n"

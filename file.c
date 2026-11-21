@@ -138,6 +138,8 @@ static void head(int k)
         if (p_isdir(x->path)) { fail(x, "对方这个路径是目录"); return; }
         char pth[1100], hh[16]; memcpy(pth, x->path, sizeof pth); memcpy(hh, x->hash, 8); hh[8] = 0;
         snprintf(x->part, sizeof x->part, "%s.%s.custhub-part", pth, hh);
+        /* 同一个半截文件还有旧的接收没结束(发送方刚被掐断、马上又发): 先关掉旧的(缓冲写盘), 再按落盘的大小续传, 不然两边一起往里写 */
+        for (int j = 0; j < MAXF; j++) if (j != k && F[j].used && F[j].st == FS_RECV && !strcmp(F[j].part, x->part)) { logf_("传文件: %s 重新开始传, 关掉上一次没收完的", x->path); fclose_(j); }
         int64_t have = p_fsize(x->part);                  /* 续传: 同一个文件没收完的部分 */
         if (have < 0 || have > x->size) have = 0;
         crypto_blake2b_init(&x->h, 32);

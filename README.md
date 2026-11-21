@@ -51,7 +51,10 @@ custhub netcheck A-2 [--json]                       # 别的机器的网络状�
 custhub log [A-2] [--grep 关键字] [--lines N]          # 日志: 不给名字是本机; 别的机器要 info 或 sh 通行证
 custhub wait A-2 version 0.3.48 [--timeout 秒]      # 等到条件成立(online offline reachable direct version); 超时返回 4
 custhub watch [--json] [--notify]                   # 持续看事件; --notify 在离线满 10 分钟、版本落后满 30 分钟、能力变差时弹桌面通知
+custhub alerts on | off | status                    # 告警: 这台电脑、当前用户登录时自动在后台 watch --notify
 ```
+
+**告警**：谁管机器谁开，`custhub alerts on` 只对这台电脑的当前用户生效。登录时自动在后台运行：Mac 用登录项（LaunchAgent），Windows 用登录时运行的计划任务，Linux 用桌面自启动。通知用系统自带的方式：Mac 通知中心、Windows 10/11 系统通知（借自带的 PowerShell）、Linux notify-send；Win7 没有系统通知。界面（TUI）的提示行也会显示告警。只提醒三种情况：离线满 10 分钟、版本落后网里最新的满 30 分钟、能力变差。
 
 **功能协商**：每台机器在位置记录里报自己支持哪些功能（`|f=`，`inventory --json` 里的 `features`）。用到某个功能前先看对方有没有：没有就当场报「对方还不支持」，不再按版本号猜，升级途中新旧版本混跑也不会误判。
 
@@ -173,6 +176,8 @@ custhub key lock
 ./build.sh              # 本机编一份 ./mesh(就是 custhub, 测试用)
 ./build.sh release      # 交叉编译全部发布目标(要 zig) → dist/out/
 dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥匙要已解锁)、gh release create
+dist/ship.sh "说明"                      # 一条龙: 全套验收必须全过 → 同步公开仓库 → release.sh
+./linux-test.sh [套名 …]                 # Debian 容器里并行跑全部 POSIX 验收(JOBS=并行数)
 ```
 
 | 测试 | 内容 |
@@ -188,6 +193,7 @@ dist/release.sh <owner>/<repo> [--dry]   # 编、签发布清单和种子(主钥
 | `decentral-test.sh` | 去中心化: 唯一的可达节点关掉后经不可达节点中转; 新机器向不可达节点报到 |
 | `file-test.sh` | 传文件: send / pull、放进目录、中文和空格路径、断了续传、内容核对、权限 |
 | `exec-test.sh` | inventory(文本 / JSON)、exec 多台并行、合并相同输出、退出码、--json、超时、不在线、没权限 |
+| `alerts-test.sh` | 告警: alerts on 写好自启动并马上起来、status、off 去掉并停掉 |
 | `v6-test.sh` | 双栈: IPv4、IPv6 分开算可达; 两条链路热备, 优先 IPv6, 断了马上走 IPv4 |
 | `sh-test.sh` | shell：命令、退出码、大输出、交互、窗口大小、Ctrl-C、收尾 |
 | `upnp-test.sh` | UPnP 自动映射（假路由器） |

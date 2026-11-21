@@ -129,15 +129,38 @@ static const char *zh(const char *type)
            !strcmp(type, "version") ? "版本" : !strcmp(type, "capability") ? "能力" : !strcmp(type, "link") ? "本机到它" : !strcmp(type, "behind") ? "版本落后超过 30 分钟" : type;
 }
 
+/* custhub alerts on|off|status: 当前用户登录时自动在后台跑 watch --notify(这台电脑上谁开谁收) */
+int cmd_alerts(const char *dir, const char *what)
+{
+    char why[300];
+    if (!strcmp(what, "status")) { printf("告警: %s\n", p_autostart_on("alerts") ? "开着(登录时自动在后台看, 离线满 10 分钟、版本落后满 30 分钟、能力变差时弹通知)" : "关着"); return 0; }
+    int on = !strcmp(what, "on");
+    if (!on && strcmp(what, "off")) { fprintf(stderr, "用法: custhub alerts on | off | status\n"); return 2; }
+    if (on) { char b[64]; if (ask(dir, "EVENTS -1", b, sizeof b)) { fprintf(stderr, "连不上本机守护(custhub 服务没在跑?)\n"); return 1; } }
+    char args[1400]; snprintf(args, sizeof args, "watch %s --notify", dir);   /* 带上节点目录(不是默认目录时也找得到守护) */
+    if (strchr(dir, ' ')) { fprintf(stderr, "节点目录里有空格, 自启动写不了: %s\n", dir); return 1; }
+    if (p_autostart("alerts", on, args, why, sizeof why)) { fprintf(stderr, "%s\n", why); return 1; }
+    printf(on ? "告警已开: 现在起、以及以后每次登录, 后台看着; 离线满 10 分钟、版本落后满 30 分钟、能力变差时弹通知\n" : "告警已关\n");
+    return 0;
+}
+
 /* custhub watch [--json] [--notify]: 持续打印事件(只要新的); --notify 对该告诉人的(离线太久、版本卡住、能力变差)弹桌面通知 */
 int cmd_watch(const char *dir, int json, int notify)
 {
+    if (notify && !json) p_hide_console();              /* 登录时后台跑的那份: Windows 上别留个黑窗口 */
     static char b[256 * 1024];
-    if (ask(dir, "EVENTS -1", b, sizeof b)) { fprintf(stderr, "连不上本机守护\n"); return 1; }
+    while (ask(dir, "EVENTS -1", b, sizeof b)) {         /* 后台跑的(--notify): 守护可能比它晚起来, 等着; 前台看的直接报错 */
+        if (!notify) { fprintf(stderr, "连不上本机守护\n"); return 1; }
+        p_sleep_ms(10000);
+    }
     long last = atol(b);
     for (;;) {
         char l[60]; snprintf(l, sizeof l, "EVENTS %ld", last);
-        if (ask(dir, l, b, sizeof b)) { fprintf(stderr, "连不上本机守护\n"); return 1; }
+        if (ask(dir, l, b, sizeof b)) {                  /* 守护重启(升级)了: 事件编号从头来 */
+            if (!notify) { fprintf(stderr, "连不上本机守护\n"); return 1; }
+            p_sleep_ms(10000); while (ask(dir, "EVENTS -1", b, sizeof b)) p_sleep_ms(10000); last = atol(b); continue;
+        }
+        if (atol(b) == 0 && last > 0 && !strchr(b, ' ')) { }   /* 空: 没有新事件 */
         char *sv = NULL;
         for (char *ln = m_tok(b, "\n", &sv); ln; ln = m_tok(NULL, "\n", &sv)) {
             long id; long long ts; char nm[32], ty[16], fr[40], to[40];

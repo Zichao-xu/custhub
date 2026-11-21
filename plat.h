@@ -73,7 +73,10 @@ void p_pty_close(int h);                    /* 还在跑就挂断它(Windows: �
 /* ---------- 本地终端(sh 客户端) ---------- */
 int  p_tty_raw(int on);                     /* 标准输入是终端时切原始模式 / 恢复; 返回是不是终端 */
 int  p_stderr_tty(void);
-void p_notify(const char *title, const char *msg);      /* 桌面通知(Mac: 通知中心; Linux: notify-send; Windows: 不弹, 只打印) */                    /* 标准错误是不是终端(进度条只在终端里刷新) */
+void p_notify(const char *title, const char *msg);
+int  p_autostart(const char *name, int on, const char *args, char *why, size_t wcap);   /* 当前用户登录时自动跑 "本程序 args"(Mac 登录项 / Windows 登录计划任务 / Linux 桌面自启动); on=1 装上并马上起来, 0 停掉并去掉 */
+int  p_autostart_on(const char *name);               /* 装着没有 */
+void p_hide_console(void);                           /* Windows: 后台跑时把控制台窗口藏起来; 别的系统什么都不做 */      /* 桌面通知(Mac: 通知中心; Linux: notify-send; Windows: 不弹, 只打印) */                    /* 标准错误是不是终端(进度条只在终端里刷新) */
 int  p_tty_ansi(void);                      /* 终端认不认 ANSI 转义(颜色、光标); Win7 控制台不认 */
 int  p_tty_size(int *rows, int *cols);      /* 0 拿到了 */
 int  p_tty_resized(void);                   /* 上次问过之后窗口大小变过 */

@@ -18,7 +18,7 @@ cleanup(){
   [ -n "${KEEP:-}" ] && echo "现场: $T" || rm -rf "$T"
 }
 trap cleanup EXIT
-base=$((20000 + RANDOM % 20000)); PR=$base GH=$((base+1))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base GH=$((base+1))
 echo "== 构建"
 OUT=$T/mesh VER=0.3.1 PLAT=mac ./build.sh >/dev/null || exit 1
 M=$T/mesh

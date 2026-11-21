@@ -102,7 +102,7 @@ o=$($M key --dir "$D" pass --to nobody --svc sh 2>&1);       echo "$o" | grep -q
 o=$($M key --dir "$D" pass --to a --svc "ssh" 2>&1);         echo "$o" | grep -q "svc 不对" && ok "--svc 写错被拒" || ng "--svc 写错没拒: $o"
 
 echo "== 本机存几张、custhub pass 装上 / 列出"
-CB=$((20000 + RANDOM % 20000))   # custhub pass 经本机守护: 给 eng、a 起守护(不开监听、没有可达节点, 只为控制口)
+CB=$(( ${PORT_BASE:-$((20000 + RANDOM % 20000))} + 500 ))   # custhub pass 经本机守护: 给 eng、a 起守护(不开监听、没有可达节点, 只为控制口)
 printf 'master %s\nctl 127.0.0.1:%s\nrelay off\nupnp off\nlog %s/eng.log\n' "$(cat "$T/master.pub")" $CB "$T" >"$D/conf"
 $M run "$D" >/dev/null 2>&1 & DP="$DP $!"
 $M key --dir "$D" pass --to b --svc "port:22" 2>/dev/null

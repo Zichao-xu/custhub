@@ -298,6 +298,7 @@ void events_text(buf_t *o, long since, int json);
 long events_last(void);
 int  events_check(const char *name, const char *cond, const char *val, char *out, size_t cap);
 int  cmd_watch(const char *dir, int json, int notify);
+int  cmd_alerts(const char *dir, const char *what);
 int  cmd_wait(const char *dir, const char *name, const char *cond, const char *val, int tmo);
 /* info.c: 远程只读查看 */
 int  info_accept(const char *req, char *why, size_t wcap);

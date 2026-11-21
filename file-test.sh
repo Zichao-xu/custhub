@@ -8,7 +8,7 @@ T=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEE
 pass=0; fail=0
 ok(){ if eval "$2"; then pass=$((pass+1)); echo "  ✔ $1"; else fail=$((fail+1)); echo "  ✘ $1"; fi; }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
-base=$((20000 + RANDOM % 20000)); PR=$base PX=$((base+1))
+base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base PX=$((base+1))
 export CUSTHUB_MESH_OBS_S=3600 CUSTHUB_IP6=
 sum(){ sha256sum "$1" | cut -c1-64; }
 

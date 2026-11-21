@@ -96,6 +96,22 @@ static void load_ls(void)
     static char t[MAXTEXT + 1024], l[32768];
     if (ctl_get("TRUST", t, sizeof t) < 0) { set_msg(1, "连不上本机守护(custhub 服务没在跑?)"); return; }
     if (ctl_get("LS", l, sizeof l) < 0) return;
+    {                                                    /* 告警: 只看该告诉人的事件(离线太久、版本卡住、能力变差), 显示在提示行 */
+        static long evl = -1; static char e[16384];
+        if (evl < 0) { if (ctl_get("EVENTS -1", e, sizeof e) >= 0) evl = atol(e); }
+        else { char q[40]; snprintf(q, sizeof q, "EVENTS %ld", evl);
+            if (ctl_get(q, e, sizeof e) >= 0) { char *sv2 = NULL;
+                for (char *ln = m_tok(e, "\n", &sv2); ln; ln = m_tok(NULL, "\n", &sv2)) {
+                    long id; long long ts; char nm[32], ty[16], fr[40], to[40];
+                    if (sscanf(ln, "%ld %lld %31s %15s %39s %39s", &id, &ts, nm, ty, fr, to) != 6) continue;
+                    evl = id; char m[200];
+                    if (!strcmp(ty, "offline_long")) snprintf(m, sizeof m, "告警: %s 离线超过 10 分钟", nm);
+                    else if (!strcmp(ty, "behind")) snprintf(m, sizeof m, "告警: %s 版本卡在 %s(网里已是 %s)", nm, fr, to);
+                    else if (!strcmp(ty, "capability") && (!strcmp(to, "relay") || (!strcmp(to, "p2p") && strcmp(fr, "relay")))) snprintf(m, sizeof m, "告警: %s 能力变差 %s → %s", nm, fr, to);
+                    else continue;
+                    set_msg(1, m);
+                } } }
+    }
     int was = sel; char wasn[32] = ""; if (was < nrw) snprintf(wasn, sizeof wasn, "%s", RW[was].name);
     nrw = 0; my6[0] = 0; mycap[0] = 0; mytp[0] = 0; myup[0] = 0;
     char *sv = NULL;
