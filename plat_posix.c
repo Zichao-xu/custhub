@@ -34,7 +34,18 @@
 
 static int would(int e) { return e == EAGAIN || e == EWOULDBLOCK || e == EINTR; }
 
-int p_init(void) { signal(SIGPIPE, SIG_IGN); return 0; }
+#ifdef __linux__
+static void android_tz(void);
+static int tz_ours;
+#endif
+int p_init(void)
+{
+    signal(SIGPIPE, SIG_IGN);
+#ifdef __linux__
+    android_tz();
+#endif
+    return 0;
+}
 
 int p_poll(pfd_t *p, int n, int ms)
 {
@@ -380,6 +391,9 @@ int p_pty_open(const char *cmd, int rows, int cols, const char *term, int *fd, c
         const char *sh = pw && pw->pw_shell && *pw->pw_shell ? pw->pw_shell : "/bin/sh";
         if (pw) { setenv("HOME", pw->pw_dir, 1); setenv("USER", pw->pw_name, 1); setenv("LOGNAME", pw->pw_name, 1); }
         setenv("SHELL", sh, 1);
+#ifdef __linux__
+        if (tz_ours) unsetenv("TZ");                    /* 安卓上给自己设的时区, 不传给 shell */
+#endif
         setenv("TERM", term && *term ? term : "xterm-256color", 1);
         if (cmd) { execl("/bin/sh", "sh", "-c", cmd, (char *)NULL); _exit(127); }
         if (pw && pw->pw_dir && chdir(pw->pw_dir)) { /* 进不了家目录就留在原地 */ }
@@ -720,7 +734,65 @@ int p_is_admin(void) { return geteuid() == 0; }
 int p_mkdir(const char *path) { return mkdir(path, 0700) == 0 || errno == EEXIST ? 0 : -1; }
 void p_private_files(void) { umask(077); }
 int p_private_dir(const char *path) { return chmod(path, 0700) ? -1 : 0; }
-void p_hostname(char *out, size_t cap) { if (gethostname(out, cap)) snprintf(out, cap, "host"); out[cap - 1] = 0; }
+/* ---------- 安卓 ----------
+ * 和其他 Linux 用同一份程序, 运行时认: 有 /system/bin/getprop 就是。系统信息都在系统属性里(没有 os-release; 主机名恒为 localhost; 没有 zoneinfo) */
+#ifdef __linux__
+static int is_android(void) { static int a = -1; if (a < 0) a = is_file("/system/bin/getprop"); return a; }
+static struct { const char *k; char v[96]; } AP[] = {
+    { "ro.product.manufacturer", "" }, { "ro.product.model", "" }, { "ro.build.version.release", "" }, { "ro.build.version.incremental", "" },
+    { "ro.product.marketname", "" }, { "ro.config.marketing_name", "" }, { "ro.vendor.oplus.market.name", "" }, { "ro.vivo.market.name", "" } };   /* 后四个: 各厂家的商品名 */
+#define NAP (sizeof AP / sizeof AP[0])
+static const char *aprop(const char *key)               /* 一次读出要用的属性(每行 "[名字]: [值]"), 之后都用缓存 */
+{
+    static int got;
+    if (!got) {
+        got = 1;
+        FILE *f = popen("/system/bin/getprop 2>/dev/null", "r");
+        char l[600];
+        while (f && fgets(l, sizeof l, f)) {
+            char *m = strstr(l, "]: ["), *e = strrchr(l, ']');
+            if (l[0] != '[' || !m || e < m + 4) continue;
+            *m = 0; *e = 0;
+            for (size_t i = 0; i < NAP; i++) if (!strcmp(l + 1, AP[i].k)) snprintf(AP[i].v, sizeof AP[i].v, "%s", m + 4);
+        }
+        if (f) pclose(f);
+    }
+    for (size_t i = 0; i < NAP; i++) if (!strcmp(key, AP[i].k)) return AP[i].v;
+    return "";
+}
+static void android_tz(void)                            /* 时区: 问系统的 date 现在差几小时(夏令时切换要重启才跟上) */
+{
+    static int done;
+    if (done || !is_android()) return;
+    done = 1; unsetenv("TZ");                           /* 升级换程序时环境会带过来, 重新算 */
+    FILE *f = popen("/system/bin/date +%z 2>/dev/null", "r");
+    char z[16] = "", tz[40];
+    if (f) { if (!fgets(z, sizeof z, f)) z[0] = 0; pclose(f); }
+    if ((z[0] != '+' && z[0] != '-') || strspn(z + 1, "0123456789") != 4) return;
+    snprintf(tz, sizeof tz, "<%.5s>%c%.2s:%.2s", z, z[0] == '+' ? '-' : '+', z + 1, z + 3);   /* POSIX 写法: 东八区是 -08:00 */
+    setenv("TZ", tz, 1); tz_ours = 1;
+}
+#endif
+
+void p_hostname(char *out, size_t cap)
+{
+    if (gethostname(out, cap)) snprintf(out, cap, "host");
+    out[cap - 1] = 0;
+#ifdef __linux__
+    if (is_android() && !strcmp(out, "localhost")) {    /* 没起过主机名: 用商品名, 再没有用型号 */
+        for (size_t i = 4; i < NAP; i++) if (aprop(AP[i].k)[0]) { snprintf(out, cap, "%s", AP[i].v); return; }
+        if (aprop("ro.product.model")[0]) snprintf(out, cap, "%s", aprop("ro.product.model"));
+    }
+#endif
+}
+const char *p_plat(void)                                /* 发布包还是 linux-*(CH_PLAT), 对外报的平台是 android-* */
+{
+#ifdef __linux__
+    static char a[40];
+    if (is_android() && !strncmp(CH_PLAT, "linux-", 6)) { snprintf(a, sizeof a, "android-%s", &CH_PLAT[6]); return a; }
+#endif
+    return CH_PLAT;
+}
 void p_sleep_ms(int ms) { poll(NULL, 0, ms); }
 
 const char *p_service_kind(void)
@@ -1016,7 +1088,8 @@ void p_public_dir(const char *path) { if (!dry()) chmod(path, 0755); }
 void p_username(char *out, size_t cap)
 {
     struct passwd *pw = getpwuid(geteuid());
-    snprintf(out, cap, "%s", pw ? pw->pw_name : "?");
+    if (pw) snprintf(out, cap, "%s", pw->pw_name);
+    else snprintf(out, cap, "uid %u", (unsigned)geteuid());   /* 安卓的 /etc/passwd 是空的 */
 }
 
 const char *p_invoker(void)
@@ -1068,6 +1141,14 @@ void p_machine(char *os, size_t ocap, char *model, size_t mcap)
     n = sizeof m;
     if (!sysctlbyname("hw.model", m, &n, NULL, 0)) snprintf(model, mcap, "Apple %s", m);
 #else
+#ifdef __linux__
+    if (is_android()) {                                 /* "Android 12 (版本号)"、"厂家 型号" */
+        const char *inc = aprop("ro.build.version.incremental"), *man = aprop("ro.product.manufacturer"), *mod = aprop("ro.product.model");
+        snprintf(os, ocap, "Android %s%s%s%s", aprop("ro.build.version.release"), inc[0] ? " (" : "", inc, inc[0] ? ")" : "");
+        snprintf(model, mcap, "%s%s%s", man, man[0] && mod[0] ? " " : "", mod);
+        return;
+    }
+#endif
     if (is_file("/etc/openwrt_release")) kv_file("/etc/openwrt_release", "DISTRIB_DESCRIPTION", os, ocap);
     if (!os[0]) kv_file("/etc/os-release", "PRETTY_NAME", os, ocap);
     read_line_file("/tmp/sysinfo/model", model, mcap);                     /* OpenWrt: 路由器型号 */

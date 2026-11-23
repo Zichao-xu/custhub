@@ -285,7 +285,7 @@ const char *my_info(void)
     if (inf[0]) return inf;
     char host[64], os[96], model[96], raw[400];
     p_hostname(host, sizeof host); p_machine(os, sizeof os, model, sizeof model);
-    snprintf(raw, sizeof raw, "%s|%.40s|%.50s|%.50s", CH_PLAT, host, os, model);
+    snprintf(raw, sizeof raw, "%s|%.40s|%.50s|%.50s", p_plat(), host, os, model);
     size_t o = 0;
     for (const char *c = raw; *c && o + 1 < sizeof inf; c++) {
         char ch = *c;

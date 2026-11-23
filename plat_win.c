@@ -1060,6 +1060,7 @@ int p_private_dir(const char *path)
     LocalFree(sd);
     return r;
 }
+const char *p_plat(void) { return CH_PLAT; }
 void p_hostname(char *out, size_t cap) { DWORD n = (DWORD)cap; if (!GetComputerNameA(out, &n)) snprintf(out, cap, "win"); }
 void p_sleep_ms(int ms) { Sleep((DWORD)ms); }
 const char *p_service_kind(void) { const char *k = getenv("CUSTHUB_SVC_KIND"); return k && *k ? k : "task"; }

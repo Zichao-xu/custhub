@@ -26,7 +26,7 @@ custhub inventory --json
 ```
 custhub exec <目标> [--json] [--timeout 秒] -- 命令…
 ```
-- 目标: `A-2` / `A-2,A-7` / 分组 `@all` `@online` `@win` `@win7` `@linux` `@mac`(都不含本机, 能混用: `@win7,A-3`)
+- 目标: `A-2` / `A-2,A-7` / 分组 `@all` `@online` `@win` `@win7` `@linux` `@android` `@mac`(都不含本机, 能混用: `@win7,A-3`)
 - `--json`: 每台 `{name, ok, code, ms, truncated, output, error}`; `error` 非空 = 没跑成(不在线、没权限、超时)
 - 不加 `--json` 时输出一样的机器合成一组显示, 一眼看出哪台不一样
 - 全部退出码 0 才返回 0; 用法错返回 2

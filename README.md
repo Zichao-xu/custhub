@@ -56,7 +56,7 @@ custhub inventory [--json]                           # 所有机器: 系统、�
 ```sh
 custhub sh A-2                                       # 交互终端
 custhub sh A-2 -- ipconfig                           # 跑一条命令, 退出码原样带回
-custhub exec @online -- uptime                       # 多台并行跑; 目标: A-2 / A-2,A-7 / @all @online @win @win7 @linux @mac
+custhub exec @online -- uptime                       # 多台并行跑; 目标: A-2 / A-2,A-7 / @all @online @win @win7 @linux @android @mac
 custhub connect A-2 3389                             # 标准输入输出接到对方本机端口
 ssh -o ProxyCommand="custhub connect %h 22" A-2      # 对方有 sshd 时, 22 当普通端口用
 ```

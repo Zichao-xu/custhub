@@ -220,7 +220,7 @@ static const char *cap_of(int v4, int v6, int punch, int json)
     return v4 && v6 ? "双栈" : v4 ? "公网" : v6 ? "IPv6" : punch ? "P2P" : "跳转";
 }
 
-/* 目标表达式: 逗号分开的名字或分组; 分组按机器自报的平台: @all @online @win @win7 @linux @mac(都不含本机)
+/* 目标表达式: 逗号分开的名字或分组; 分组按机器自报的平台: @all @online @win @win7 @linux @android @mac(都不含本机)
  * 返回 0 时 out = "A-2 A-7"; 失败返回 -1, out = "ERR 原因" */
 int targets_resolve(const char *expr, char *out, size_t cap)
 {
@@ -244,8 +244,9 @@ int targets_resolve(const char *expr, char *out, size_t cap)
                 else if (!strcmp(t, "@win")) { if (strncmp(plat, "win", 3)) continue; }
                 else if (!strcmp(t, "@win7")) { if (strncmp(plat, "win7", 4)) continue; }
                 else if (!strcmp(t, "@linux")) { if (strncmp(plat, "linux", 5)) continue; }
+                else if (!strcmp(t, "@android")) { if (strncmp(plat, "android", 7)) continue; }
                 else if (!strcmp(t, "@mac")) { if (strncmp(plat, "mac", 3)) continue; }
-                else { snprintf(out, cap, "ERR 不认识的分组 %s(有 @all @online @win @win7 @linux @mac)", t); return -1; }
+                else { snprintf(out, cap, "ERR 不认识的分组 %s(有 @all @online @win @win7 @linux @android @mac)", t); return -1; }
             }
             hit = 1;
             int dup = 0; for (int k = 0; k < n; k++) if (!memcmp(seen[k], m->ed, 32)) dup = 1;

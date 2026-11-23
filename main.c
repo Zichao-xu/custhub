@@ -203,7 +203,7 @@ int cmd_mesh(int argc, char **argv)
             "  custhub send <本机文件> <名字> <对方路径>     发文件过去(对方路径是目录就放进去); 断了再执行一次会续传\n"
             "  custhub pull <本机路径> <名字> <对方文件>     把对方的文件拉过来(本机路径是目录就放进去); 同上\n"
             "  custhub inventory [--json]                  所有机器的基本信息(系统、机型、版本、能力、本机到它怎么连), 不连机器\n"
-            "  custhub exec <目标> [--json] [--timeout 秒] -- 命令…   多台并行跑一条命令; 目标: 名字 / A-2,A-7 / @all @online @win @win7 @linux @mac\n"
+            "  custhub exec <目标> [--json] [--timeout 秒] -- 命令…   多台并行跑一条命令; 目标: 名字 / A-2,A-7 / @all @online @win @win7 @linux @android @mac\n"
             "  custhub netcheck <名字>                     看别的机器的网络状况(只读; 要 info 或 sh 通行证)\n"
             "  custhub log [名字] [--grep 关键字] [--lines 行数]   看日志(不给名字 = 本机; 别的机器要 info 或 sh 通行证)\n"
             "  custhub watch [--json] [--notify]           持续看事件(上线、离线、版本、能力、直连); --notify 离线太久、版本卡住、能力变差时弹通知\n"

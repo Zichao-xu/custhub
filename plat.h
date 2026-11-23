@@ -104,6 +104,7 @@ int  p_mkdir(const char *path);             /* 已存在也算成功; 新建的�
 void p_private_files(void);                 /* 本进程之后新建的文件只有自己能读写(POSIX umask 077); 程序一开始就调 */
 int  p_private_dir(const char *path);       /* 把已有目录收紧: POSIX 0700; Windows 只留 SYSTEM 和 Administrators(子项继承); 0 成功 */
 void p_hostname(char *out, size_t cap);
+const char *p_plat(void);                   /* 对外报的平台名: 一般就是 CH_PLAT; 安卓跑的是 linux-* 的包, 报 android-* */
 void p_machine(char *os, size_t ocap, char *model, size_t mcap);   /* 系统("Windows 11 专业版 24H2" / "macOS 15.1" / "Debian GNU/Linux 12" / "OpenWrt 23.05")、机型(厂家 + 型号); 取不到给空 */
 void p_sleep_ms(int ms);
 /* 注册系统服务: 开机起、挂了自动拉起, 跑 "exe run dir"; 注册完马上启动

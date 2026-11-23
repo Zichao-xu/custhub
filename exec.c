@@ -1,6 +1,6 @@
 /* custhub exec <目标> [--json] [--timeout 秒] -- 命令…
  *   在一台或多台机器上跑一条命令, 并行, 拿每台的输出和退出码; 输出一样的合并显示, 一眼看出哪台不一样
- *   目标: 名字、逗号分开的几个、分组(@all @online @win @win7 @linux @mac), 能混用("@win7,A-3")
+ *   目标: 名字、逗号分开的几个、分组(@all @online @win @win7 @linux @android @mac), 能混用("@win7,A-3")
  *   走的是现成的 sh 服务(带命令跑完就退, 回退出码): 对方不用新功能、不用新权限(要有 sh 通行证); 全在发起这头做
  *   输出: 去掉终端控制码(颜色、光标、标题)和回车, 只留文字; 伪终端里标准输出和错误输出是合在一起的 */
 #include "mesh.h"
@@ -64,7 +64,7 @@ int cmd_exec(int argc, char **argv)
     }
     if (i >= argc - 1 || tmo <= 0) {
         fprintf(stderr, "用法: custhub exec <目标> [--json] [--timeout 秒] -- 命令…\n"
-                        "  目标: 名字 / 逗号分开的几个 / 分组 @all @online @win @win7 @linux @mac(能混用, 如 @win7,A-3)\n"
+                        "  目标: 名字 / 逗号分开的几个 / 分组 @all @online @win @win7 @linux @android @mac(能混用, 如 @win7,A-3)\n"
                         "  要有对方的 sh 通行证; 输出一样的机器合并显示; 全部退出码 0 才返回 0\n");
         return 2;
     }

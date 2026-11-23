@@ -200,7 +200,7 @@ int cmd_join3(int argc, char **argv)
     for (char *c = host; *c; c++) if (*c == ' ') *c = '_';
     sep_join(logp, sizeof logp, node, "mesh.log");
     const char *ctl = getenv("CUSTHUB_CTL");           /* 测试用: 本机已经有一份在跑时换个控制口 */
-    int n = snprintf(nc, sizeof nc, "master %s\nctl %s\nlog %s\nhello %s %s %s\n", master_line, ctl && *ctl ? ctl : CTL_V3, logp, host, CH_PLAT, CH_VERSION);
+    int n = snprintf(nc, sizeof nc, "master %s\nctl %s\nlog %s\nhello %s %s %s\n", master_line, ctl && *ctl ? ctl : CTL_V3, logp, host, p_plat(), CH_VERSION);
     if (repo) n += snprintf(nc + n, sizeof nc - (size_t)n, "github %s\n", repo);
     if (ol > 0) {
         char *sv = NULL;
