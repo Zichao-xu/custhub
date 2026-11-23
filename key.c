@@ -40,6 +40,33 @@ static int ok_svc(const char *s)
     return n > 0;
 }
 
+size_t pass_sign(const uint8_t who[32], const char *tos, const char *svc, double hours, char *text, size_t cap, int64_t *until, char *why, size_t wcap)
+{
+    static char body[PASSMAX]; static pass_t P;
+    char whob[48], fs[24], us[24];
+    b64_encode(who, 32, whob);
+    int64_t now = wall_ms() / 1000, from = now - 60, u = now + (int64_t)(hours * 3600);
+    utc_fmt(from, fs); utc_fmt(u, us);
+    int bl = snprintf(body, sizeof body, "custhub-pass v1\nkey %s\nto %s\nsvc %s\nfrom %s\nuntil %s\n--end--\n", whob, tos, svc, fs, us);
+    if (bl <= 0 || (size_t)bl >= sizeof body || (size_t)bl >= cap) { snprintf(why, wcap, "通行证太长"); return 0; }
+
+    uint8_t tbs[256], req[512], resp[512], sig[64];
+    size_t tn = sshsig_tbs("custhub-pass", (const uint8_t *)body, (size_t)bl, tbs, sizeof tbs);
+    size_t rn = agent_sign_req(G.master, tbs, tn, req, sizeof req);
+    long an = p_agent_call(req, rn, resp, sizeof resp, why, wcap);
+    if (an < 0) return 0;
+    if (agent_sign_resp(resp, (size_t)an, sig)) { snprintf(why, wcap, "ssh-agent 里没有主钥匙(先解锁)"); return 0; }
+    size_t al = sshsig_armor(G.master, "custhub-pass", sig, text + bl, cap - (size_t)bl);
+    if (!al) { snprintf(why, wcap, "通行证太长"); return 0; }
+    memcpy(text, body, (size_t)bl);
+    char w2[120];
+    if (pass_parse(text, (size_t)bl + al, G.master, &P, w2, sizeof w2) || pass_allows(&P, who, NULL, NULL, now, w2, sizeof w2)) {
+        snprintf(why, wcap, "签出来的通行证自己验不过(%s), 不输出", w2); return 0;
+    }
+    if (until) *until = u;
+    return (size_t)bl + al;
+}
+
 int cmd_pass(int argc, char **argv)
 {
     const char *dir = NULL, *to = NULL, *svc = "sh", *forw = NULL, *out = NULL; double hours = 2;
@@ -68,7 +95,7 @@ int cmd_pass(int argc, char **argv)
     else if (key_of(forw, who, 0)) { fprintf(stderr, "--for %s: 名单里没有这个名字, 也不是节点公钥\n", forw); return 2; }
     b64_encode(who, 32, whob);
 
-    static char body[PASSMAX], tos[PASSTO * 48 + 8];
+    static char tos[PASSTO * 48 + 8];
     size_t tl = 0; int nto = 0;
     if (!strcmp(to, "all")) tl = (size_t)snprintf(tos, sizeof tos, "all");
     else {
@@ -82,27 +109,10 @@ int cmd_pass(int argc, char **argv)
             tl += (size_t)snprintf(tos + tl, sizeof tos - tl, "%s%s", tl ? " " : "", kb);
         }
     }
-    int64_t now = wall_ms() / 1000, from = now - 60, until = now + (int64_t)(hours * 3600);
-    char fs[24], us[24]; utc_fmt(from, fs); utc_fmt(until, us);
-    int bl = snprintf(body, sizeof body, "custhub-pass v1\nkey %s\nto %s\nsvc %s\nfrom %s\nuntil %s\n--end--\n", whob, tos, svc, fs, us);
-
-    uint8_t tbs[256], req[512], resp[512], sig[64]; char why[120];
-    size_t tn = sshsig_tbs("custhub-pass", (const uint8_t *)body, (size_t)bl, tbs, sizeof tbs);
-    size_t rn = agent_sign_req(G.master, tbs, tn, req, sizeof req);
-    long an = p_agent_call(req, rn, resp, sizeof resp, why, sizeof why);
-    if (an < 0) { fprintf(stderr, "签不了: %s\n", why); return 1; }
-    if (agent_sign_resp(resp, (size_t)an, sig)) { fprintf(stderr, "签不了: ssh-agent 里没有主钥匙(先解锁)\n"); return 1; }
-
-    static char text[PASSMAX];
-    size_t al = sshsig_armor(G.master, "custhub-pass", sig, text + bl, sizeof text - (size_t)bl);
-    if (!al) { fprintf(stderr, "通行证太长\n"); return 1; }
-    memcpy(text, body, (size_t)bl);
-    size_t len = (size_t)bl + al;
-
-    static pass_t P;
-    if (pass_parse(text, len, G.master, &P, why, sizeof why) || pass_allows(&P, who, NULL, NULL, now, why, sizeof why)) {
-        fprintf(stderr, "签出来的通行证自己验不过(%s), 不输出\n", why); return 1;
-    }
+    static char text[PASSMAX]; char why[160], us[24]; int64_t until;
+    size_t len = pass_sign(who, tos, svc, hours, text, sizeof text, &until, why, sizeof why);
+    if (!len) { fprintf(stderr, "签不了: %s\n", why); return 1; }
+    utc_fmt(until, us);
     char path[1300];
     if (!forw && !out) {                                  /* 给本机: 存进本机的通行证位置(几张并存) */
         if (pass_store(text, len, path, sizeof path)) { fprintf(stderr, "存不了: %s\n", path); return 1; }

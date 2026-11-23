@@ -64,6 +64,22 @@ static void pass_slot(int k, char *p, size_t cap)
     if (k) snprintf(p, cap, "%s/pass.%d", G.dir, k); else snprintf(p, cap, "%s/pass", G.dir);
 }
 
+/* 解锁 = 能用: 主钥匙在 ssh-agent 里, 却没有对这次连接有效的通行证(过期 / 不含这台 / 不含这项服务)
+ *   → 当场给本机签一张(进全部机器、全部服务、PASSAUTO_H 小时)存起来再用; 过期了下次连接再签
+ *   主钥匙不在(上锁 / 没 agent)就什么都不做; 不缓存"不在", 刚解锁马上重试就能用(问一次本机 agent 只要几毫秒) */
+static int pass_auto(char *buf, size_t cap)
+{
+    static char t[PASSMAX];
+    char why[160], slot[1300];
+    if (!member_by_ed(G.id.ed)) return 0;
+    size_t n = pass_sign(G.id.ed, "all", "sh file info port:*", PASSAUTO_H, t, sizeof t, NULL, why, sizeof why);
+    if (!n || n > cap) return 0;
+    if (pass_store(t, n, slot, sizeof slot)) logf_("自动签的通行证存不了: %s", slot);
+    else logf_("主钥匙解锁着, 没有合适的通行证: 自动给本机签了一张(进全部机器、全部服务、%d 小时)", PASSAUTO_H);
+    memcpy(buf, t, n);
+    return (int)n;
+}
+
 int pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap)
 {
     static char t[PASSMAX + 1]; static pass_t P;
@@ -79,7 +95,8 @@ int pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap)
             (svc && !strncmp(svc, "info:", 5) && (!pass_allows(&P, G.id.ed, dst, "info", now, why, sizeof why) || !pass_allows(&P, G.id.ed, dst, "sh", now, why, sizeof why)))) { memcpy(buf, t, (size_t)n); return (int)n; }
         if (fk < 0) fk = k;
     }
-    if (fk < 0) return 0;                       /* 没有合适的: 给第一张(对方会说拒绝原因; 取包不要通行证) */
+    if (dst) { int an = pass_auto(buf, cap); if (an) return an; }
+    if (fk < 0) return 0;                      /* 没有合适的: 给第一张(对方会说拒绝原因; 取包不要通行证) */
     pass_slot(fk, p, sizeof p);
     long n = m_read(p, buf, cap);
     return n > 0 ? (int)n : 0;

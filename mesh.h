@@ -340,6 +340,8 @@ const char *node_default(void);                          /* 默认节点目录(�
 #define PASSSLOTS 8              /* 本机存的通行证: <目录>/pass, pass.1 … pass.7 */
 int  pass_load(const uint8_t *dst, const char *svc, char *buf, size_t cap);   /* 发起方: 挑一张对 dst + 服务有效的(dst NULL: 没过期就行); 没有返回 0 */
 int  pass_store(const char *text, size_t len, char *slot, size_t scap);       /* 存进 <目录>: 同对象同范围的替换, 否则空位 / 过期的 / 最早到期的; 0 成功 */
+size_t pass_sign(const uint8_t who[32], const char *tos, const char *svc, double hours, char *text, size_t cap, int64_t *until, char *why, size_t wcap);   /* key.c: 问 ssh-agent 里的主钥匙签一张, 签完自验; 签不了返回 0 */
+#define PASSAUTO_H 2             /* 主钥匙解锁着、没有合适的通行证时, 给本机自动签的有效小时数(过期了再自动签) */
 int  cmd_pass_local(int argc, char **argv);              /* custhub pass [文件]: 装上 / 列出本机通行证(经本机守护) */
 void pass_text(buf_t *o, const char *one, size_t olen);  /* 通行证一览(守护里用) */
 /* app.c */

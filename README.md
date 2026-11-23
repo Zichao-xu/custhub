@@ -28,8 +28,10 @@ irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1
 ```sh
 custhub key unlock                                   # 输入 12 个词, 主钥匙进 ssh-agent(默认 8 小时)
 custhub key approve R44-CQP                          # 批准, 自动编号 A-1、A-2 …
-custhub key pass --to A-2 --hours 2                  # 给自己签一张进 A-2 的通行证
+custhub key pass --to A-2 --hours 2                  # 给别人签 / 给自己签范围更小的(可选)
 ```
+
+主钥匙解锁着的时候，本机连别的机器如果没有合适的通行证（过期、不含这台、不含这项服务），守护会当场给本机签一张（进全部机器、全部服务、2 小时）再连，过期了下次连接再签。所以对管理员自己来说，**解锁 = 能用**；上锁后不再自动签。
 
 **3. 用起来**
 

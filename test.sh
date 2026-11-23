@@ -117,7 +117,7 @@ grep -q "名单 v1 → v2(来自 兜底来源)" "$T/a.log" && ok "a 的名单经
 
 echo "== 6 拒绝"
 o=$(printf x | $M connect "$T/a" b 9 2>&1); echo "$o" | grep -q "端口不开放" && ok "不放行端口被拒: $o" || ng "端口 9 没被拒: $o"
-cp "$T/a/pass" "$T/a.pass.good"
+cp "$T/a/pass" "$T/a.pass.good"; ssh-add -q -D 2>/dev/null   # 上锁: 解锁着没有合适的证会自动签(exec-test 验)
 rej(){  # rej 说明 期望原因; 用 a 现在的 pass 连 b 的回显口
   local o; o=$(printf x | $M connect "$T/a" b $ECHO 2>&1)
   echo "$o" | grep -q "$2" && ok "$1被拒: $o" || ng "$1没被拒: $o"
@@ -129,7 +129,7 @@ mkpass "$T/master" "$T/a/pass" "$(cat "$T/a.pub")" all "port:*" -7200 -3600;    
 mkpass "$T/master" "$T/a/pass" "$(cat "$T/b.pub")" all "port:*";                   rej "发给别人的通行证" "不是发给这台机器的"
 ssh-keygen -q -t ed25519 -N '' -C evil -f "$T/evil"
 mkpass "$T/evil" "$T/a/pass" "$(cat "$T/a.pub")" all "port:*";                     rej "不是主钥匙签的通行证" "签名不对"
-cp "$T/a.pass.good" "$T/a/pass"
+cp "$T/a.pass.good" "$T/a/pass"; ssh-add -q "$T/master" 2>/dev/null
 cp "$T/trust2" "$T/x/trust"; conf x $((base+15)); printf "fallback /nonexistent\nhello host-x tunkey-abc\n" >>"$T/x/conf"
 start x; sleep 3
 xp=$(cat "$T/x.pub")

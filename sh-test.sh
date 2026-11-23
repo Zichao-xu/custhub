@@ -60,13 +60,13 @@ o=$(printf 'echo hi-$((1+2))\nexit 7\n' | S | tr -d '\r' | sed $'s/\x1b\\[[?0-9;
 echo "$o" | grep -q "^hi-3$" && [ $c = 7 ] && ok "管道喂给登录 shell: 输出对, 退出码 7" || ng "交互: $c [$o]"
 
 echo "== 3 拒绝"
-cp "$T/e/pass" "$T/e.pass"; rm -f "$T/e/pass"
+cp "$T/e/pass" "$T/e.pass"; rm -f "$T/e/pass"; ssh-add -q -D 2>/dev/null   # 上锁: 解锁着会自动签(exec-test 验)
 o=$(S -- true 2>&1 </dev/null); c=$?
 echo "$o" | grep -q "没有通行证" && [ $c = 255 ] && ok "没通行证被拒: $o" || ng "没证: $c $o"
-$M key --dir "$T/e" pass --to b --svc "port:*" 2>/dev/null
+ssh-add -q "$T/master" 2>/dev/null; $M key --dir "$T/e" pass --to b --svc "port:*" 2>/dev/null; ssh-add -q -D 2>/dev/null
 o=$(S -- true 2>&1 </dev/null)
 echo "$o" | grep -q "不含这项服务" && ok "通行证没有 sh 被拒: $o" || ng "证里无 sh: $o"
-cp "$T/e.pass" "$T/e/pass"
+cp "$T/e.pass" "$T/e/pass"; ssh-add -q "$T/master" 2>/dev/null
 o=$(t30 $M sh "$T/g" b -- true 2>&1 </dev/null)
 echo "$o" | grep -q "不含这台机器" && ok "访客开通行证外的 b 被可达节点拦下: $o" || ng "访客开 b: $o"
 o=$(t30 $M sh "$T/g" e -- echo from-guest 2>&1 </dev/null | tr -d '\r')

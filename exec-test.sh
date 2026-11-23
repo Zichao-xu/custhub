@@ -4,7 +4,8 @@ set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
 M=$PWD/mesh
-T=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEEP:-}" ] && echo "现场: $T" || rm -rf "$T"' EXIT
+T=$(mktemp -d); eval "$(ssh-agent -s)" >/dev/null   # 自己的空 agent: 守护继承它, 不碰真的主钥匙
+trap 'kill $SSH_AGENT_PID $(jobs -p) 2>/dev/null; wait 2>/dev/null; [ -n "${KEEP:-}" ] && echo "现场: $T" || rm -rf "$T"' EXIT
 pass=0; fail=0
 ok(){ if eval "$2"; then pass=$((pass+1)); echo "  ✔ $1"; else fail=$((fail+1)); echo "  ✘ $1"; fi; }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
@@ -50,6 +51,13 @@ o=$($M exec "$T/x" z -- echo hi 2>&1)
 ok "不在线的机器: 标出连不上的原因" 'echo "$o" | grep -q "^── z  ✘ "'
 mv "$T/x/pass" "$T/x/pass.off"; o=$($M exec "$T/x" r -- echo hi 2>&1); mv "$T/x/pass.off" "$T/x/pass"
 ok "没有 sh 通行证: 被拒" 'echo "$o" | grep -q "^── r  ✘ " && ! echo "$o" | grep -qx "hi"'
+mkdir -p "$T/px"; mv "$T"/x/pass* "$T/px/"; ssh-add -q "$T/master" 2>/dev/null
+o=$($M exec "$T/x" r -- echo hi 2>&1)
+ok "主钥匙解锁着、没有通行证: 自动给本机签一张, 照样跑成" 'echo "$o" | grep -qx "hi" && grep -q "自动给本机签了一张" "$T/x.log" && grep -q "^to all$" "$T/x/pass"'
+ssh-add -q -D 2>/dev/null; rm -f "$T"/x/pass*
+o=$($M exec "$T/x" r -- echo hi 2>&1)
+ok "上锁后、没有通行证: 不自动签, 被拒" 'echo "$o" | grep -q "^── r  ✘ " && [ ! -e "$T/x/pass" ]'
+mv "$T"/px/pass* "$T/x/"
 
 echo "== 4 远程只读查看 / 功能协商 / 各命令的 --json"
 ok "netcheck r: 看别的机器的网络状况" '$M netcheck "$T/x" r | grep -q "^TCP 入站: "'
