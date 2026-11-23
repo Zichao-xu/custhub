@@ -110,6 +110,8 @@ void p_sleep_ms(int ms);
 /* 注册系统服务: 开机起、挂了自动拉起, 跑 "exe run dir"; 注册完马上启动
  * 演练模式(环境变量 CUSTHUB_SVC_DRY=1): 服务文件写到 dir/dry/ 下, 不碰系统, 改成直接在后台起 "exe run dir"
  * 种类由 CUSTHUB_SVC_KIND=systemd|procd|launchd|task 可指定(测试用), 否则自动认 */
+void p_run_prepare(const char *dir);        /* 守护启动前: 安卓降到 adb 身份、补开机脚本; 别的系统什么也不做 */
+const char *p_conf_default(void);           /* 新接入时 conf 里默认加的行(安卓: relay off、upnp off) */
 int  p_service_install(const char *exe, const char *dir, char *why, size_t wcap);
 int  p_service_remove(const char *dir, char *why, size_t wcap);
 const char *p_service_kind(void);

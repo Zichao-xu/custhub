@@ -22,6 +22,9 @@
 #include <termios.h>
 #include <pwd.h>
 #include <grp.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <sys/stat.h>
 #include <dirent.h>
 #include <netinet/in.h>
@@ -703,6 +706,11 @@ void p_fetch_kill(int h)
 
 /* ---------- 部署 ---------- */
 static int is_file(const char *p) { struct stat st; return stat(p, &st) == 0 && S_ISREG(st.st_mode); }
+#ifdef __linux__
+static int is_android(void) { static int a = -1; if (a < 0) a = is_file("/system/bin/getprop"); return a; }
+#else
+static int is_android(void) { return 0; }
+#endif
 static int is_dir(const char *p) { struct stat st; return stat(p, &st) == 0 && S_ISDIR(st.st_mode); }
 
 static int user_mode;
@@ -726,18 +734,20 @@ const char *p_install_dir(void)
 #ifdef __APPLE__
     return "/Library/Application Support/custhub";
 #else
+#ifdef __linux__
+    if (is_android()) return "/data/local/tmp/custhub";  /* adb 身份能写、能执行的地方 */
+#endif
     return is_file("/etc/openwrt_release") ? "/usr/lib/custhub" : "/opt/custhub";
 #endif
 }
 
-int p_is_admin(void) { return geteuid() == 0; }
+int p_is_admin(void) { return geteuid() == 0 || (is_android() && geteuid() == 2000); }   /* 安卓: adb 身份就能装 */
 int p_mkdir(const char *path) { return mkdir(path, 0700) == 0 || errno == EEXIST ? 0 : -1; }
 void p_private_files(void) { umask(077); }
 int p_private_dir(const char *path) { return chmod(path, 0700) ? -1 : 0; }
 /* ---------- 安卓 ----------
  * 和其他 Linux 用同一份程序, 运行时认: 有 /system/bin/getprop 就是。系统信息都在系统属性里(没有 os-release; 主机名恒为 localhost; 没有 zoneinfo) */
 #ifdef __linux__
-static int is_android(void) { static int a = -1; if (a < 0) a = is_file("/system/bin/getprop"); return a; }
 static struct { const char *k; char v[96]; } AP[] = {
     { "ro.product.manufacturer", "" }, { "ro.product.model", "" }, { "ro.build.version.release", "" }, { "ro.build.version.incremental", "" },
     { "ro.product.marketname", "" }, { "ro.config.marketing_name", "" }, { "ro.vendor.oplus.market.name", "" }, { "ro.vivo.market.name", "" } };   /* 后四个: 各厂家的商品名 */
@@ -799,6 +809,7 @@ const char *p_service_kind(void)
 {
     const char *k = getenv("CUSTHUB_SVC_KIND");
     if (k && *k) return k;
+    if (is_android()) return "android";
     if (user_mode) return is_dir("/Library/LaunchAgents") ? "launchd-user" : is_file("/bin/systemctl") || is_file("/usr/bin/systemctl") ? "systemd-user" : "";
     if (is_dir("/Library/LaunchDaemons")) return "launchd";
     if (is_file("/etc/openwrt_release")) return "procd";
@@ -838,6 +849,90 @@ static int put_file(const char *dir, const char *path, const char *text, int exe
     if (exec) chmod(p, 0755);
     return ok ? 0 : -1;
 }
+
+/* ---------- 安卓的开机启动 ----------
+ * 有 root(Magisk / KernelSU / APatch 都认 /data/adb/service.d): 放一个开机脚本, 等开机完成后起 custhub, 挂了 5 秒后拉起; custhub 自己降到 adb 身份再跑
+ * 没有 root: 系统不给开机入口, 只能起在后台, 重启后要有人再叫一次
+ * 放过的脚本内容记在 节点目录/boot(第一行 ok / no): 内容没变就不再要 root(每次要都会弹提示), 变了(升级)由守护自己换 */
+#ifdef __linux__
+#define BOOT "/data/adb/service.d/custhub.sh"
+static char boot_s[1600];
+static const char *boot_script(const char *dir)         /* dir = 节点目录 */
+{
+    char h[300]; snprintf(h, sizeof h, "%s", dir); char *sl = strrchr(h, '/'); if (sl) *sl = 0;
+    snprintf(boot_s, sizeof boot_s, "#!/system/bin/sh\n# custhub: 开机起, 挂了拉起(custhub join 放的, custhub remove 删)\n"
+        "export PATH=$PATH:/system/bin:/system/xbin:/vendor/bin\n"
+        "H=%s S=" BOOT " P=/data/adb/custhub.pid\n"
+        "[ \"$1\" = loop ] || { setsid sh $S loop </dev/null >/dev/null 2>&1 & exit 0; }\n"
+        "o=$(cat $P 2>/dev/null); [ -n \"$o\" ] && [ \"$o\" != $$ ] && grep -q custhub.sh /proc/$o/cmdline 2>/dev/null && exit 0\n"
+        "echo $$ >$P\n"
+        "until [ \"$(getprop sys.boot_completed)\" = 1 ]; do sleep 3; done\n"
+        "while [ -f $S ] && [ -x $H/custhub ]; do\n"
+        "  pgrep -f \"custhub run %s\" >/dev/null || $H/custhub run %s </dev/null >/dev/null 2>&1\n"
+        "  sleep 5\ndone\nrm -f $P\n", h, dir, dir);
+    return boot_s;
+}
+static int as_root(const char *cmds)                    /* 命令从标准输入喂给 root 的 sh; 返回退出码, 没有 root = 非 0 */
+{
+    FILE *f = popen(geteuid() == 0 ? "sh >/dev/null 2>&1" : "su -c sh >/dev/null 2>&1", "w");
+    if (!f) return -1;
+    fputs(cmds, f);
+    int st = pclose(f);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+static int boot_mark(const char *dir, const char *want, char *state)   /* 记着的脚本和想要的一样 = 1, state 是当时的结果 */
+{
+    char p[1300], b[1700]; snprintf(p, sizeof p, "%s/boot", dir);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+    if (n < 3) return 0;
+    *state = b[0];
+    return !strcmp(b + 3, want);
+}
+static int boot_install(const char *dir)
+{
+    static char c[2400]; const char *s = boot_script(dir);
+    char h[300]; snprintf(h, sizeof h, "%s", dir); char *sl = strrchr(h, '/'); if (sl) *sl = 0;
+    snprintf(c, sizeof c, "[ -d /data/adb/service.d ] || exit 3\n[ \"$(id -u)\" = 0 ] || exit 4\ncat >" BOOT ".tmp <<'CUSTHUB_EOF' || exit 5\n%sCUSTHUB_EOF\n"
+             "chmod 755 " BOOT ".tmp && mv " BOOT ".tmp " BOOT " || exit 6\nchown -R 2000:2000 %s\nsh " BOOT "\nexit 0\n", s, h);
+    int bad = as_root(c);
+    char p[1300]; snprintf(p, sizeof p, "%s/boot", dir);
+    FILE *f = fopen(p, "w");
+    if (f) { fprintf(f, "%s\n%s", bad ? "no" : "ok", s); fclose(f); }
+    if (f && geteuid() == 0 && chown(p, 2000, 2000)) { /* 不影响 */ }
+    return bad ? -1 : 0;
+}
+#endif
+
+/* 守护启动时: 安卓上降到 adb 身份, 开机脚本没有或旧了就补(不耽误启动, 另起进程做) */
+void p_run_prepare(const char *dir)
+{
+#ifdef __linux__
+    char std[1200]; snprintf(std, sizeof std, "%s/node", p_install_dir());
+    if (!is_android() || strcmp(dir, std)) return;
+    if (geteuid() == 0) {
+        static const gid_t gs[] = { 2000, 1004, 1007, 1011, 1015, 1028, 1078, 1079, 3001, 3002, 3003, 3006, 3009, 3011 };   /* adb shell 的那些组 */
+        if (setgroups(sizeof gs / sizeof gs[0], gs) || setgid(2000) || setuid(2000)) { fprintf(stderr, "降不到 adb 身份: %s\n", strerror(errno)); exit(1); }
+        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);             /* 不然改不了自己的 SELinux 域 */
+        int fd = open("/proc/self/attr/current", O_WRONLY);
+        if (fd >= 0) { if (write(fd, "u:r:shell:s0", 12) < 0) { /* 换不了域就留在原来的 */ } close(fd); }
+    }
+    char st = 0;
+    if (boot_mark(dir, boot_script(dir), &st)) return;
+    pid_t c = fork();
+    if (c == 0) {
+        if (fork()) _exit(0);
+        setsid();
+        for (int f = 0; f < 1024; f++) close(f);
+        int nul = open("/dev/null", O_RDWR); if (nul == 0) { dup2(0, 1); dup2(0, 2); }
+        boot_install(dir); _exit(0);
+    }
+    if (c > 0) waitpid(c, NULL, 0);
+#else
+    (void)dir;
+#endif
+}
+const char *p_conf_default(void) { return is_android() ? "relay off\nupnp off\n" : ""; }   /* 手机默认只往外连, 不监听、不碰路由器 */
 
 int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
 {
@@ -896,6 +991,20 @@ int p_service_install(const char *exe, const char *dir, char *why, size_t wcap)
                    *c[] = { "systemctl", "--user", "restart", "custhub", NULL };
         run_q(a); run_q(b);
         if (run_q(c)) { snprintf(why, wcap, "systemctl --user restart custhub 失败: %s", run_out); return -1; }
+#ifdef __linux__
+    } else if (!strcmp(k, "android") && !dry()) {
+        if (boot_install(dir)) {
+            printf("  没拿到 root(或没有 /data/adb/service.d): 现在能用, 但手机重启后不会自己回来\n"); fflush(stdout);
+            pid_t pid = fork();
+            if (pid == 0) {
+                setsid();
+                int nul = open("/dev/null", O_RDWR); if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
+                for (int f = 3; f < 1024; f++) close(f);
+                execl(exe, exe, "run", dir, (char *)NULL); _exit(127);
+            }
+        } else { printf("  开机自启: 已装好\n"); fflush(stdout); }
+#endif
+    } else if (!strcmp(k, "android")) {                 /* 演练: 下面起 */
     } else { snprintf(why, wcap, "认不出这台机器的服务管理方式(systemd / procd / launchd)"); return -1; }
     if (dry()) {                                        /* 演练: 不碰系统, 直接在后台起 */
         pid_t pid = fork();
@@ -921,6 +1030,18 @@ int p_service_remove(const char *dir, char *why, size_t wcap)
         if (f) { if (fgets(t, sizeof t, f)) kill((pid_t)atoi(t), SIGTERM); fclose(f); }
         return 0;
     }
+#ifdef __linux__
+    if (!strcmp(k, "android")) {
+        char c[600], st = 0; int r = -1;
+        snprintf(c, sizeof c, "rm -f " BOOT "\no=$(cat /data/adb/custhub.pid 2>/dev/null)\n[ -n \"$o\" ] && grep -q custhub.sh /proc/$o/cmdline 2>/dev/null && kill $o\nrm -f /data/adb/custhub.pid\npkill -f 'custhub run %s'\nexit 0\n", dir);
+        boot_mark(dir, "", &st);
+        if (st == 'o') r = as_root(c);                  /* 放过开机脚本才去要 root */
+        if (r) { char e[700]; snprintf(e, sizeof e, "pkill -f 'custhub run %s' >/dev/null 2>&1", dir); if (system(e)) { /* 没在跑 */ } }
+        char p[1300]; snprintf(p, sizeof p, "%s/boot", dir); unlink(p);
+        p_sleep_ms(500);
+        return 0;
+    }
+#endif
     if (!strcmp(k, "systemd")) {
         const char *a[] = { "systemctl", "disable", "--now", "custhub", NULL }; run_q(a);
         unlink(SD_UNIT);
@@ -980,7 +1101,7 @@ int p_path_link(const char *exe, int on, char *how, size_t cap)
 {
     how[0] = 0;
     const char *pd = getenv("CUSTHUB_PATH_DIR");
-    if (dry() && !(pd && *pd)) return 0;
+    if ((dry() || is_android()) && !(pd && *pd)) return 0;
     int user = geteuid() != 0;
     const char *home = getenv("HOME");
     if (user && (!home || !*home)) { struct passwd *pw = getpwuid(getuid()); home = pw ? pw->pw_dir : NULL; }
@@ -1031,7 +1152,7 @@ static int has_cmd(const char *c)
 int p_group_setup(char *why, size_t wcap)
 {
     why[0] = 0;
-    if (dry() || getgrnam(GRP)) return 0;
+    if (dry() || is_android() || getgrnam(GRP)) return 0;   /* 安卓没有用户组可建 */
     int r;
     if (is_dir("/Library")) { const char *a[] = { "dseditgroup", "-o", "create", "-r", "custhub users", GRP, NULL }; r = run_q(a); }
     else if (has_cmd("groupadd")) { const char *a[] = { "groupadd", "-r", GRP, NULL }; r = run_q(a); }
@@ -1075,7 +1196,7 @@ int p_group_list(char *out, size_t cap)
 
 int p_group_member(void)
 {
-    if (geteuid() == 0) return 1;
+    if (p_is_admin()) return 1;
     struct group *g = getgrnam(GRP);
     if (!g) return 0;
     gid_t l[256]; int n = getgroups(256, l);

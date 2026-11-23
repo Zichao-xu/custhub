@@ -62,8 +62,8 @@ int cmd_mesh(int argc, char **argv)
         printf("%s\n", b64);
         return 0;
     }
-    if (argc == 3 && !strcmp(c, "run")) { path_ensure(); return mesh_run(argv[2]); }
-    if (argc == 2 && !strcmp(c, "run")) { path_ensure(); return cmd_run(0, argv + 2); }   /* 默认安装目录下的 node */
+    if (argc == 3 && !strcmp(c, "run")) { p_run_prepare(argv[2]); path_ensure(); return mesh_run(argv[2]); }
+    if (argc == 2 && !strcmp(c, "run")) { p_run_prepare(node_default()); path_ensure(); return cmd_run(0, argv + 2); }   /* 默认安装目录下的 node */
     if (argc == 3 && !strcmp(c, "ls")) return cmd_ls(argv[2]);
     if (argc == 5 && !strcmp(c, "connect")) return cmd_connect(argv[2], argv[3], argv[4]);
     if (argc == 4 && !strcmp(c, "ctl")) return cmd_ctl(argv[2], argv[3]);

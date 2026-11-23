@@ -208,6 +208,7 @@ int cmd_join3(int argc, char **argv)
             if (!strncmp(l, "relay ", 6) || !strncmp(l, "upnp ", 5) || !strncmp(l, "allow ", 6) || !strncmp(l, "listen ", 7) || !strncmp(l, "announce ", 9) || !strncmp(l, "release_base ", 13))
                 n += snprintf(nc + n, sizeof nc - (size_t)n, "%s\n", l);
     }
+    if (!strstr(nc, "\nrelay ")) n += snprintf(nc + n, sizeof nc - (size_t)n, "%s", p_conf_default());
     if (m_write(p, nc, (size_t)n)) { fprintf(stderr, "写不了 %s\n", p); return 1; }
     if (!p_user_mode() && !getenv("CUSTHUB_HOME")) {    /* 本机谁能用: custhub 组的账号不用 root(经本机守护) */
         char gw[200];

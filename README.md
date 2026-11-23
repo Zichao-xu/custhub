@@ -115,6 +115,8 @@ Windows 在 Win+R / cmd / PowerShell 里粘贴（弹 UAC），Mac / Linux 在终
 
 **本机谁能用**：跑接入的账号（用 sudo 时是 sudo 之前的账号）加进本机的 `custhub` 用户组，重新登录后不用 sudo 就能 `sh / connect / ls / pass`。别的账号用 `sudo custhub user add <账号>` 加（`user del` 移出，`user ls` 列出）。组里的账号碰不到节点钥匙，但能用本机的通行证进别的机器，只加可信的人。`join`、`remove`、`user`、`key` 要 root，不是 root 时自动换成 sudo（Windows 上提示用管理员终端）。
 
+**安卓**：在 `adb shell` 里跑接入命令（不要 root，装在 `/data/local/tmp/custhub`，以 adb 身份运行，默认 `relay off`、`upnp off`）。拿得到 root 且有 `/data/adb/service.d`（Magisk 等）就自动放一个开机脚本，开机起、挂了拉起；没有 root 的会说明重启后不会自己回来。老版本装的，升级后守护自己补上。
+
 **卸载**：`custhub remove`（服务、PATH、安装目录一起撤）。
 
 ## 管理员

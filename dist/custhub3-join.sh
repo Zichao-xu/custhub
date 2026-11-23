@@ -20,6 +20,7 @@ case "$(uname -s)/$(uname -m)" in
   Darwin/x86_64)                   PLAT=mac-x64 ;;
   *) die "不支持这台机器: $(uname -s) $(uname -m)" ;;
 esac
+ANDROID=; [ -f /system/bin/getprop ] && { ANDROID=1; export TMPDIR=/data/local/tmp; }   # 安卓: adb shell 里跑, 不要 sudo
 T=$(mktemp -d 2>/dev/null || mktemp -d -t custhub); trap 'rm -rf "$T"' EXIT
 fetch(){  # fetch 网址 输出文件: 依次试直连和两个国内能用的镜像
   for p in "" https://ghfast.top/ https://gh-proxy.com/; do
@@ -45,7 +46,7 @@ elif [ "$GOT" != "$WANT" ]; then die "程序的 sha512 和发布清单对不上,
 fi
 chmod +x "$T/custhub"
 case " ${CUSTHUB_JOIN_ARGS:-} " in *" --user "*) USERMODE=1 ;; *) USERMODE= ;; esac   # 用户模式(管理电脑): 不用 sudo
-if [ "$(id -u)" = 0 ] || [ -n "$USERMODE" ]; then "$T/custhub" join --seed "$T/seed" ${CUSTHUB_JOIN_ARGS:-}
+if [ "$(id -u)" = 0 ] || [ -n "$USERMODE$ANDROID" ]; then "$T/custhub" join --seed "$T/seed" ${CUSTHUB_JOIN_ARGS:-}
 elif command -v sudo >/dev/null 2>&1; then say "  要管理员权限(会问一次开机密码)"; sudo "$T/custhub" join --seed "$T/seed" ${CUSTHUB_JOIN_ARGS:-}
 else die "要 root 权限"
 fi

@@ -20,7 +20,7 @@ CC=gcc ./build.sh 2>/tmp/build.err || { echo "编译失败:"; grep -A3 "error" /
 # 系统自动分配的临时端口挪到 50000 以上(上面 docker --sysctl), 各套监听用的 20000~41000 不会被别的连接先占掉
 SERIAL=" net-test punch-test group-test android-test "
 J=${JOBS:-$(( $(nproc) + 2 ))}
-run1(){ CC=gcc CUSTHUB_PREBUILT=1 PORT_BASE=$2 ./"$1".sh >"/tmp/$1.out" 2>&1; echo $? >"/tmp/$1.rc"; }   # 每套一段互不重叠的端口(PORT_BASE 起 1000 个)
+run1(){ CC=gcc CUSTHUB_PREBUILT=1 PORT_BASE=$2 ./"$1".sh >"/tmp/$1.out" 2>&1 && echo 0 >"/tmp/$1.rc" || echo 1 >"/tmp/$1.rc"; }   # 每套一段互不重叠的端口(PORT_BASE 起 1000 个)
 i=0
 for t in "$@"; do
   i=$((i + 1))
