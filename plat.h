@@ -81,6 +81,7 @@ int  p_tty_ansi(void);                      /* 终端认不认 ANSI 转义(颜�
 int  p_tty_size(int *rows, int *cols);      /* 0 拿到了 */
 int  p_tty_resized(void);                   /* 上次问过之后窗口大小变过 */
 int  p_read_secret(const char *prompt, char *buf, size_t cap);   /* 从终端读一行, 不回显; 0 成功 */
+void p_setenv(const char *k, const char *v);   /* 设 / 删(v=NULL)本进程环境变量, 之后起的子进程继承 */
 int  p_stdin_fd(void);                      /* 能放进 p_poll、用 p_recv 读的标准输入(Windows: 后台线程桥接成 socket) */
 int  p_stdout_write(const void *b, size_t n);   /* 写完为止; 0 成功 */
 

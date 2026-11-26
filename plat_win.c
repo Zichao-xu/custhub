@@ -1370,3 +1370,10 @@ int p_read_secret(const char *prompt, char *buf, size_t cap)
     if (con) { SetConsoleMode(in, m); WriteFile(out, "\r\n", 2, &w, NULL); }
     return n ? 0 : -1;
 }
+
+void p_setenv(const char *k, const char *v)            /* _putenv: Win7 自带的 msvcrt 也有; CRT 和进程环境一起改, 子进程继承 */
+{
+    static char e[1200];
+    snprintf(e, sizeof e, "%s=%s", k, v ? v : ""); _putenv(e);
+    memset(e, 0, sizeof e);
+}

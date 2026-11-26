@@ -1318,3 +1318,8 @@ int p_read_secret(const char *prompt, char *buf, size_t cap)
     if (fd > 0) close(fd);
     return n ? 0 : -1;
 }
+
+void p_setenv(const char *k, const char *v)
+{
+    if (v) setenv(k, v, 1); else unsetenv(k);
+}

@@ -1,7 +1,7 @@
 /* custhub 不带参数: 终端界面(design-v3 §0 第 20 条)
  *   数据都问本机守护(控制口 LS / TRUST), 管理动作交给 custhub 自己的子命令(子进程跑, 输出收回来显示), 不另写一套逻辑
- *   没解锁主钥匙: 基础功能(机器列表、开 shell、本机通行证、装通行证、本机信息)
- *   解锁后多出: 待批准 / 批准、签通行证、新客户接入、移出名单、上锁
+ *   没解锁主钥匙: 只显示本机卡片 + 按钮(解锁 / 本机通行证 / 装通行证 / 退出); 网里别的机器一概不显示
+ *   解锁(界面里弹窗输口令)后: 机器列表、开 shell、待批准 / 批准、签通行证、新客户接入、移出名单、上锁
  * 只用 ANSI 转义序列(Windows 10 控制台由平台模块开 VT 模式), 不依赖 curses */
 #include "mesh.h"
 #include <stdio.h>
@@ -302,8 +302,59 @@ static void draw(void)
     out(msg_err ? "\x1b[31m" : "\x1b[36m"); cell(msg[0] ? msg : "", cols); out("\x1b[0m\r\n");
     out("\x1b[2m");
     cell(" ↑↓ 选  Enter 开 shell  v 本机通行证  i 装通行证  r 刷新  q 退出", cols); out("\r\n");
-    cell(unlocked ? " a 批准  s 签通行证  n 新客户接入  d 移出名单  l 上锁" : " u 解锁主钥匙(管理功能: 批准、签通行证、新客户接入、移出)", cols);
+    cell(" a 批准  s 签通行证  n 新客户接入  d 移出名单  l 上锁", cols);
     out("\x1b[0m");
+    flush_out();
+}
+
+/* ---------- 没解锁: 只画本机 ----------
+ * 没有主钥匙时不给看网里别的机器(名字、地址、系统都算); 只剩本机卡片 + 几个按钮(←→ / Tab 选, Enter 按) */
+static const char *LBTN[] = { "解锁主钥匙", "本机通行证", "装通行证", "退出" };
+enum { LB_UNLOCK, LB_PASS, LB_INSTALL, LB_QUIT, LB_N };
+static int lsel;                                         /* 锁定页选中的按钮 */
+
+static void kv(const char *k, const char *v)             /* 卡片一行: "   键     值" */
+{
+    if (!v || !v[0]) return;
+    out("   \x1b[2m"); cell(k, 9); out("\x1b[0m"); cell(v, cols - 12); out("\r\n");
+}
+
+static void buttons(const char *const *lb, int n, int on, int indent)
+{
+    for (int i = 0; i < indent; i++) out(" ");
+    for (int i = 0; i < n; i++) {
+        out(i == on ? "\x1b[7m" : "\x1b[2m");
+        out("[ %s ]", lb[i]); out("\x1b[0m  ");
+    }
+    out("\r\n");
+}
+
+static void draw_locked(void)
+{
+    p_tty_size(&rows, &cols);
+    if (rows < 8) rows = 8;
+    if (cols < 40) cols = 40;
+    S.len = 0;
+    out("\x1b[H\x1b[2J");
+    char head[300];
+    snprintf(head, sizeof head, " custhub %s · 本机 %s · 主钥匙: 未解锁", CH_VERSION, me);
+    out("\x1b[7m"); cell(head, cols); out("\x1b[0m\r\n\r\n");
+    row_t *r = NULL; for (int i = 0; i < nrw; i++) if (RW[i].self) r = &RW[i];
+    row_t fb; if (!r) { memset(&fb, 0, sizeof fb); snprintf(fb.name, sizeof fb.name, "%s", me); set_info(&fb, my_info()); r = &fb; }
+    char b[200];
+    out("   \x1b[1m本机 %s\x1b[0m\r\n\r\n", r->name);
+    kv("机器名", r->host); kv("系统", r->os[0] ? r->os : r->plat); kv("机型", r->model);
+    kv("版本", CH_VERSION); kv("接入码", r->code); kv("能力", mycap);
+    if (r->relay && addr_fam(r->addr) == 4) kv("公网地址", r->addr);
+    kv("IPv6", my6);
+    if (mytp[0] || myup[0]) { snprintf(b, sizeof b, "TCP %s  UDP %s", mytp[0] ? mytp : "-", myup[0] ? myup : "-"); kv("打洞", b); }
+    if (r->key[0]) { snprintf(b, sizeof b, "%.16s…", r->key); kv("公钥", b); }
+    out("\r\n");
+    buttons(LBTN, LB_N, lsel, 3);
+    out("\r\n   \x1b[2m网里其他机器、批准、签通行证要先解锁主钥匙\x1b[0m\r\n");
+    out("\x1b[%d;1H", rows - 1);
+    out(msg_err ? "\x1b[31m" : "\x1b[36m"); cell(msg[0] ? msg : "", cols); out("\x1b[0m\r\n");
+    out("\x1b[2m"); cell(" ←→ / Tab 选  Enter 确定  u 解锁主钥匙  v 本机通行证  i 装通行证  q 退出", cols); out("\x1b[0m");
     flush_out();
 }
 
@@ -421,17 +472,80 @@ static void act_pass_install(void)
     if (!rc) pager(" 装上通行证", o);
 }
 
+/* 解锁弹窗: 口令(不回显, 只显示圆点) / 时长 / [解锁] [取消], Tab ↑↓ 换焦点, Enter 确定, Esc 取消
+ * 口令经环境变量 CUSTHUB_PASSPHRASE 交给子命令 key unlock(和命令行同一套逻辑), 跑完立刻清掉 */
+static void env_pass(const char *v) { p_setenv("CUSTHUB_PASSPHRASE", v); }
+
+static int u8len(const char *s) { int n = 0; for (; *s; s++) if (((unsigned char)*s & 0xC0) != 0x80) n++; return n; }
+
+static void draw_unlock(const char *ph, const char *hrs, int f, const char *err, int busy)
+{
+    static const char *ub[] = { "解锁", "取消" };
+    int w = cols - 8 < 64 ? cols - 8 : 64, x = (cols - w) / 2 + 1, y = rows / 2 - 4; if (y < 2) y = 2;
+    char dots[200]; int nd = u8len(ph); if (nd > w - 16) nd = w - 16;
+    size_t k = 0; for (int i = 0; i < nd && k + 4 < sizeof dots; i++) { memcpy(dots + k, "\xe2\x80\xa2", 3); k += 3; } dots[k] = 0;   /* • */
+    char l[300];
+    S.len = 0;
+    for (int i = 0; i < 9; i++) { out("\x1b[%d;%dH\x1b[0m", y + i, x); cell("", w); }      /* 先清出一块 */
+    out("\x1b[%d;%dH\x1b[7m", y, x); cell(" 解锁主钥匙", w); out("\x1b[0m");
+    out("\x1b[%d;%dH", y + 2, x + 2); out(f == 0 ? "\x1b[1;4m" : "\x1b[2m"); out("口令"); out("\x1b[0m  ");
+    snprintf(l, sizeof l, "%s%s", dots, f == 0 && !busy ? "_" : ""); cell(l, w - 10);
+    out("\x1b[%d;%dH", y + 3, x + 2); out(f == 1 ? "\x1b[1;4m" : "\x1b[2m"); out("时长"); out("\x1b[0m  ");
+    snprintf(l, sizeof l, "%s%s 小时", hrs, f == 1 && !busy ? "_" : ""); cell(l, w - 10);
+    out("\x1b[%d;%dH", y + 5, x); buttons(ub, 2, f >= 2 ? f - 2 : -1, 2);
+    out("\x1b[%d;%dH", y + 7, x + 2);
+    out(busy ? "\x1b[36m" : err[0] ? "\x1b[31m" : "\x1b[2m");
+    cell(busy ? "派生主钥匙(要几秒)…" : err[0] ? err : "Tab / ↑↓ 换项  Enter 确定  Esc 取消  Ctrl-U 清空", w - 4);
+    out("\x1b[0m");
+    flush_out();
+}
+
 static void act_unlock(void)
 {
-    screen(0);
-    printf("\x1b[2J\x1b[H── 解锁主钥匙 ──\n"); fflush(stdout);
-    char *av[4] = { "--dir", tdir, "unlock", NULL };
-    int rc = cmd_key(3, av);
-    if (rc) { printf("\n按回车返回"); fflush(stdout); char b[200]; p_read_secret("", b, sizeof b); }
-    G.quiet = 1;
-    screen(1);
-    load_status(); load_pending();
-    set_msg(!unlocked, unlocked ? "已解锁: 管理功能可以用了" : "没解锁");
+    char ph[1024] = "", hrs[16] = "8", err[300] = "";
+    int f = 0;
+    for (;;) {
+        draw_unlock(ph, hrs, f, err, 0);
+        char b[256]; long r = read_key(b, sizeof b, 600000);
+        if (r < 0) break;
+        if (r == 0) continue;
+        int go = 0, quit = 0;
+        if (!strcmp(b, "\x1b[A") || !strcmp(b, "\x1bOA") || !strcmp(b, "\x1b[Z")) { f = (f + 3) % 4; continue; }
+        if (!strcmp(b, "\x1b[B") || !strcmp(b, "\x1bOB") || !strcmp(b, "\t")) { f = (f + 1) % 4; continue; }
+        if (f >= 2 && (!strcmp(b, "\x1b[D") || !strcmp(b, "\x1b[C") || !strcmp(b, "\x1bOD") || !strcmp(b, "\x1bOC"))) { f = f == 2 ? 3 : 2; continue; }
+        for (long i = 0; i < r && !go && !quit; i++) {
+            unsigned char c = (unsigned char)b[i];
+            if (c == '\r' || c == '\n') { if (f == 3) quit = 1; else go = 1; break; }
+            if (c == 3 || (c == 27 && r == 1)) { quit = 1; break; }
+            if (c == 27) break;                          /* 别的转义序列: 不管 */
+            if (f >= 2) continue;
+            char *v = f == 0 ? ph : hrs; size_t cap = f == 0 ? sizeof ph : sizeof hrs, n = strlen(v);
+            if (c == 21) { memset(v, 0, cap); continue; }                         /* Ctrl-U */
+            if (c == 127 || c == 8) { while (n && ((unsigned char)v[n - 1] & 0xC0) == 0x80) n--; if (n) n--; v[n] = 0; continue; }
+            if (f == 1 && !((c >= '0' && c <= '9') || c == '.')) continue;
+            if (c >= 32 && n + 1 < cap) { v[n++] = (char)c; v[n] = 0; }
+        }
+        if (quit) break;
+        if (!go) continue;
+        if (!ph[0]) { snprintf(err, sizeof err, "先输口令"); f = 0; continue; }
+        if (atof(hrs) <= 0) { snprintf(err, sizeof err, "时长要大于 0"); f = 1; continue; }
+        draw_unlock(ph, hrs, f, "", 1);
+        static char o[4096];
+        env_pass(ph);
+        int rc = self_run(o, sizeof o, "key", "--dir", tdir, "unlock", hrs, (const char *)NULL);
+        env_pass(NULL);
+        memset(ph, 0, sizeof ph);
+        if (!rc) {
+            load_status(); load_pending(); load_ls();
+            sel = 0; top = 0;
+            set_msg(!unlocked, unlocked ? "已解锁 %s 小时: 管理功能可以用了" : "子命令说解锁了, 但 ssh-agent 里查不到主钥匙", hrs);
+            return;
+        }
+        last_line(o, err, sizeof err); if (!err[0]) snprintf(err, sizeof err, "没解锁");
+        f = 0;
+    }
+    memset(ph, 0, sizeof ph);
+    set_msg(0, "没解锁");
 }
 
 static void act_lock(void)
@@ -530,16 +644,30 @@ int cmd_tui(const char *dir)
     in_fd = p_stdin_fd();
     screen(1);
     load_ls(); load_status(); load_pending();
-    if (!msg[0]) set_msg(0, unlocked ? "主钥匙已解锁: 管理功能可用" : "基础功能; 按 u 解锁主钥匙后有管理功能");
+    if (!msg[0]) set_msg(0, unlocked ? "主钥匙已解锁: 管理功能可用" : "没解锁: 只显示本机; 解锁后看全网、管理");
     for (;;) {
-        draw();
+        int was = unlocked;
+        if (unlocked) draw(); else draw_locked();
         char b[64]; long r = read_key(b, sizeof b, 2000);
         if (r < 0) break;
         int64_t now = now_ms();
         if (now - t_ls > 2000) load_ls();
         if (now - t_status > 15000) load_status();
         if (unlocked && now - t_pend > (watching ? 5000 : 20000)) load_pending();
+        if (was && !unlocked) { npd = 0; watching = 0; lsel = 0; set_msg(1, "主钥匙过期 / 被上锁了: 只显示本机"); }
         if (r == 0) continue;
+        if (!was) {                                      /* 锁定页: 只有按钮 */
+            if (!strcmp(b, "\x1b[D") || !strcmp(b, "\x1bOD") || !strcmp(b, "\x1b[A") || !strcmp(b, "\x1bOA") || !strcmp(b, "\x1b[Z") || !strcmp(b, "h") || !strcmp(b, "k")) { lsel = (lsel + LB_N - 1) % LB_N; continue; }
+            if (!strcmp(b, "\x1b[C") || !strcmp(b, "\x1bOC") || !strcmp(b, "\x1b[B") || !strcmp(b, "\x1bOB") || !strcmp(b, "\t") || !strcmp(b, "l") || !strcmp(b, "j")) { lsel = (lsel + 1) % LB_N; continue; }
+            int a = -1;
+            if (b[0] == '\r' || b[0] == '\n') a = lsel;
+            else if (b[0] == 'u') a = LB_UNLOCK; else if (b[0] == 'v') a = LB_PASS; else if (b[0] == 'i') a = LB_INSTALL;
+            else if (b[0] == 'q' || b[0] == 3) a = LB_QUIT;
+            else if (b[0] == 'r') { load_ls(); load_status(); set_msg(0, "刷新了"); }
+            if (a == LB_QUIT) break;
+            if (a == LB_UNLOCK) act_unlock(); else if (a == LB_PASS) act_pass_list(); else if (a == LB_INSTALL) act_pass_install();
+            continue;
+        }
         int nitems = nrw + (unlocked ? npd : 0);
         if (!strcmp(b, "\x1b[A") || !strcmp(b, "\x1bOA") || !strcmp(b, "k")) { if (sel > 0) sel--; continue; }
         if (!strcmp(b, "\x1b[B") || !strcmp(b, "\x1bOB") || !strcmp(b, "j")) { if (sel + 1 < nitems) sel++; continue; }
@@ -549,12 +677,12 @@ int cmd_tui(const char *dir)
         case 'r': load_ls(); load_status(); load_pending(); set_msg(0, "刷新了"); break;
         case 'v': act_pass_list(); break;
         case 'i': act_pass_install(); break;
-        case 'u': if (unlocked) set_msg(0, "已经解锁了"); else act_unlock(); break;
-        case 'l': if (unlocked) act_lock(); break;
-        case 'a': if (unlocked) act_approve(); else set_msg(1, "先按 u 解锁主钥匙"); break;
-        case 's': if (unlocked) act_sign(); else set_msg(1, "先按 u 解锁主钥匙"); break;
-        case 'n': if (unlocked) act_new_client(); else set_msg(1, "先按 u 解锁主钥匙"); break;
-        case 'd': if (unlocked) act_remove(); else set_msg(1, "先按 u 解锁主钥匙"); break;
+        case 'u': set_msg(0, "已经解锁了"); break;
+        case 'l': act_lock(); lsel = 0; break;
+        case 'a': act_approve(); break;
+        case 's': act_sign(); break;
+        case 'n': act_new_client(); break;
+        case 'd': act_remove(); break;
         default: break;
         }
     }

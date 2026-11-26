@@ -4,7 +4,8 @@
 #   2 x 报到 → 待批准里出现 → a + 回车(默认名) → 批准
 #   3 s 签通行证给本机进 x → Enter 开 shell → 跑命令 → exit 回到列表
 #   4 d + y 移出 x
-#   5 上锁后管理功能藏起来
+#   5 上锁后只剩本机卡片 + 按钮(别的机器不显示)
+#   6 界面里弹窗解锁: 错口令弹窗里报错、还是锁着; 对口令解锁回到全网列表
 set -uo pipefail
 cd "$(dirname "$0")"
 ./build.sh >/dev/null || exit 1
@@ -17,18 +18,19 @@ ng(){ echo "  ✘ $*"; fail=$((fail+1)); }
 wait_for(){ local s=$1; shift; for _ in $(seq $((s*4))); do "$@" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }
 base=${PORT_BASE:-$((20000 + RANDOM % 20000))}; PR=$base
 eval "$(ssh-agent -s)" >/dev/null
-ssh-keygen -q -t ed25519 -N '' -C custhub-master -f "$T/master"
+PH="umbra quill tundra jasper mosaic ripple falcon ember cobalt meadow lantern pivot"   # 主钥匙由测试口令推出(弹窗解锁要用)
+CUSTHUB_PASSPHRASE="$PH" $M masterpub >"$T/master.pub" || { echo "推不出测试主钥匙"; exit 1; }
 for n in r adm x; do mkdir -p "$T/$n"; $M keygen "$T/$n" >"$T/$n.pub"; done
 i=0; for n in r adm x; do i=$((i+1))
   printf 'master %s\nctl 127.0.0.1:%s\nlog %s/%s.log\nupnp off\nhello host-%s mac-test 0.0.0\n' "$(cut -d' ' -f1,2 "$T/master.pub")" $((base+10+i)) "$T" "$n" "$n" >"$T/$n/conf"
   [ $n = r ] || echo "relay off" >>"$T/$n/conf"
 done
 { echo "custhub-mesh-trust 1"; echo "relay r $(cat "$T/r.pub") 127.0.0.1:$PR"; echo "node adm $(cat "$T/adm.pub")"; echo "--end--"; } >"$T/d1"
-ssh-keygen -q -Y sign -f "$T/master" -n custhub-mesh-trust "$T/d1" 2>/dev/null; cat "$T/d1" "$T/d1.sig" >"$T/t1"
+CUSTHUB_PASSPHRASE="$PH" $M key --dir "$T/adm" unlock 1 >/dev/null 2>&1 || { echo "测试主钥匙放不进 ssh-agent"; exit 1; }
+ssh-keygen -q -Y sign -f "$T/master.pub" -n custhub-mesh-trust "$T/d1" 2>/dev/null; cat "$T/d1" "$T/d1.sig" >"$T/t1"
 for n in r adm x; do cp "$T/t1" "$T/$n/trust"; done
 printf 'listen 127.0.0.1:%s\n' $PR >>"$T/r/conf"
 for n in r adm x; do CUSTHUB_MESH_PENDING_S=2 $M run "$T/$n" >/dev/null 2>&1 & DP="$DP $!"; done
-ssh-add -q "$T/master" 2>/dev/null
 wait_for 20 sh -c "$M ls $T/adm | grep -qE '^  r .* 通$'"
 wait_for 20 grep -qF "$(cat "$T/x.pub")" "$T/r/pending"
 
@@ -82,11 +84,19 @@ out['back'] = until(r'shell 结束了', 15)
 os.write(fd, b'd'); pump(0.5); os.write(fd, b'y\r')
 out['removed'] = until(r'移出', 15); out['after_remove'] = screen()
 pump(3); out['after_remove2'] = screen()
-os.write(fd, b'l'); out['locked'] = until(r'主钥匙: 未解锁', 10); out['after_lock'] = screen()
+os.write(fd, b'l'); out['locked'] = until(r'主钥匙: 未解锁', 10); pump(1); out['after_lock'] = screen()
+# 6 弹窗解锁: 先错口令, 再对口令
+os.write(fd, b'\r')                                       # 锁定页默认选中 [解锁主钥匙]
+out['modal'] = until(r'口令', 5); out['modal_s'] = screen()
+os.write(fd, b'wrong words here alpha beta gamma delta epsilon zeta'); pump(0.3)
+out['dots'] = '•' * 10 in buf.decode('utf-8','replace')[-4000:] and 'alpha' not in buf.decode('utf-8','replace')[-4000:]
+os.write(fd, b'\r'); out['wrong'] = until(r'不一样', 30); out['wrong_s'] = screen()
+os.write(fd, os.environ['PH'].encode()); pump(0.3); os.write(fd, b'\r')
+out['unlocked'] = until(r'主钥匙: 已解锁', 30); pump(2); out['after_unlock'] = screen()
 os.write(fd, b'q'); pump(1)
 print(json.dumps(out, ensure_ascii=False))
 PY
-R=$(python3 "$T/drive.py" "$M" tui "$T/adm"); [ -n "${DEBUG:-}" ] && echo "$R" >"$T/r.json"
+R=$(PH="$PH" python3 "$T/drive.py" "$M" tui "$T/adm"); [ -n "${DEBUG:-}" ] && echo "$R" >"$T/r.json"
 j(){ python3 -c 'import json,sys; v=json.loads(sys.argv[1])[sys.argv[2]]; print(v if isinstance(v,str) else ("1" if v else ""))' "$R" "$1"; }
 
 echo "== 1 列表"
@@ -102,8 +112,14 @@ s=$(j after_sign); echo "$s" | grep -qE "A-1 +在线 +[^ -][^ ]* +(macOS|Debian|
 echo "== 4 移出"
 [ -n "$(j removed)" ] && ! echo "$(j after_remove2)" | grep -q "A-1  " && ok "d + y: 移出 A-1" || ng "移出: $(j after_remove2)"
 echo "== 5 上锁"
-s=$(j after_lock); [ -n "$(j locked)" ] && echo "$s" | grep -q "u 解锁主钥匙" && ! echo "$s" | grep -q "a 批准" && ok "l 上锁: 管理功能藏起来, 提示 u 解锁" || ng "上锁: $s"
-ssh-add -L 2>/dev/null | grep -q custhub-master && ng "上锁后 agent 里还有主钥匙" || ok "agent 里没有主钥匙了"
+s=$(j after_lock); [ -n "$(j locked)" ] && echo "$s" | grep -q "\[ 解锁主钥匙 \]" && echo "$s" | grep -q "接入码 " && ! echo "$s" | grep -q "a 批准" && ok "l 上锁: 只剩本机卡片 + [解锁主钥匙] 按钮" || ng "上锁: $s"
+echo "$s" | grep -qE "^[ >] r +|host-r|127\.0\.0\.1:$PR" && ng "锁着还看得到别的机器: $s" || ok "锁着看不到别的机器(r 的名字、地址都不在屏上)"
+echo "== 6 弹窗解锁"
+[ -n "$(j modal)" ] && echo "$(j modal_s)" | grep -q "时长" && ok "Enter 打开解锁弹窗(口令 / 时长 / 按钮)" || ng "弹窗: $(j modal_s)"
+[ -n "$(j dots)" ] && ok "口令只显示圆点, 不回显原文" || ng "口令回显了"
+[ -n "$(j wrong)" ] && ok "错口令: 弹窗里报\"主公钥不一样\", 留在弹窗" || ng "错口令: $(j wrong_s)"
+s=$(j after_unlock); [ -n "$(j unlocked)" ] && echo "$s" | grep -qE "^[ >] r +在线" && echo "$s" | grep -q "a 批准" && ok "对口令: 解锁, 回到全网列表 + 管理功能" || ng "解锁: $s"
+ssh-add -D >/dev/null 2>&1
 
 echo "== 结果: 通过 $pass, 失败 $fail"
 [ $fail = 0 ]
