@@ -1,6 +1,6 @@
 /* custhub 不带参数: 终端界面(design-v3 §0 第 20 条)
  *   数据都问本机守护(控制口 LS / TRUST), 管理动作交给 custhub 自己的子命令(子进程跑, 输出收回来显示), 不另写一套逻辑
- *   没解锁主钥匙: 只显示本机卡片 + 按钮(解锁 / 本机通行证 / 装通行证 / 退出); 网里别的机器一概不显示
+ *   没解锁主钥匙: 只显示本机卡片 + 按钮(解锁 / 退出); 网里别的机器一概不显示
  *   解锁(界面里弹窗输口令)后: 机器列表、开 shell、待批准 / 批准、签通行证、新客户接入、移出名单、上锁
  * 只用 ANSI 转义序列(Windows 10 控制台由平台模块开 VT 模式), 不依赖 curses */
 #include "mesh.h"
@@ -309,8 +309,8 @@ static void draw(void)
 
 /* ---------- 没解锁: 只画本机 ----------
  * 没有主钥匙时不给看网里别的机器(名字、地址、系统都算); 只剩本机卡片 + 几个按钮(←→ / Tab 选, Enter 按) */
-static const char *LBTN[] = { "解锁主钥匙", "本机通行证", "装通行证", "退出" };
-enum { LB_UNLOCK, LB_PASS, LB_INSTALL, LB_QUIT, LB_N };
+static const char *LBTN[] = { "解锁主钥匙", "退出" };
+enum { LB_UNLOCK, LB_QUIT, LB_N };
 static int lsel;                                         /* 锁定页选中的按钮 */
 
 static void kv(const char *k, const char *v)             /* 卡片一行: "   键     值" */
@@ -354,7 +354,7 @@ static void draw_locked(void)
     out("\r\n   \x1b[2m网里其他机器、批准、签通行证要先解锁主钥匙\x1b[0m\r\n");
     out("\x1b[%d;1H", rows - 1);
     out(msg_err ? "\x1b[31m" : "\x1b[36m"); cell(msg[0] ? msg : "", cols); out("\x1b[0m\r\n");
-    out("\x1b[2m"); cell(" ←→ / Tab 选  Enter 确定  u 解锁主钥匙  v 本机通行证  i 装通行证  q 退出", cols); out("\x1b[0m");
+    out("\x1b[2m"); cell(" ←→ / Tab 选  Enter 确定  u 解锁主钥匙  q 退出", cols); out("\x1b[0m");
     flush_out();
 }
 
@@ -661,11 +661,11 @@ int cmd_tui(const char *dir)
             if (!strcmp(b, "\x1b[C") || !strcmp(b, "\x1bOC") || !strcmp(b, "\x1b[B") || !strcmp(b, "\x1bOB") || !strcmp(b, "\t") || !strcmp(b, "l") || !strcmp(b, "j")) { lsel = (lsel + 1) % LB_N; continue; }
             int a = -1;
             if (b[0] == '\r' || b[0] == '\n') a = lsel;
-            else if (b[0] == 'u') a = LB_UNLOCK; else if (b[0] == 'v') a = LB_PASS; else if (b[0] == 'i') a = LB_INSTALL;
+            else if (b[0] == 'u') a = LB_UNLOCK;
             else if (b[0] == 'q' || b[0] == 3) a = LB_QUIT;
             else if (b[0] == 'r') { load_ls(); load_status(); set_msg(0, "刷新了"); }
             if (a == LB_QUIT) break;
-            if (a == LB_UNLOCK) act_unlock(); else if (a == LB_PASS) act_pass_list(); else if (a == LB_INSTALL) act_pass_install();
+            if (a == LB_UNLOCK) act_unlock();
             continue;
         }
         int nitems = nrw + (unlocked ? npd : 0);
