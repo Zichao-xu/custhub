@@ -135,7 +135,7 @@ int cmd_pass(int argc, char **argv)
 }
 
 /* ===================== custhub key: 管理端(持主钥匙的一方) =====================
- *   key unlock [小时]        口令 → 主钥匙放进 ssh-agent(默认 8 小时; 派生同 passkey.py, 主钥匙不变)
+ *   key unlock [小时]        口令 → 主钥匙放进 ssh-agent(默认永久 = 直到上锁或 ssh-agent 退出, 给小时数就限时; 派生同 passkey.py, 主钥匙不变)
  *   key lock | status
  *   key pending              各可达节点收到的报到(主钥匙当场签的查询), 带接入码
  *   key approve <接入码> <名字>    批准: 名单加一行 node, 版本 +1, 签名, 交给本机节点沿链路传开
@@ -260,7 +260,7 @@ static int key_unlock(double hours, int no_node)          /* no_node: 还没有�
     memset(seed, 0, 32); memset(sk, 0, 64); memset(req, 0, sizeof req);
     if (an < 0) { fprintf(stderr, "放不进 ssh-agent: %s\n", why); return 1; }
     if (an < 1 || resp[0] != 6) { fprintf(stderr, "ssh-agent 拒绝了\n"); return 1; }
-    printf("已解锁 %g 小时\n", hours);
+    if (hours > 0) printf("已解锁 %g 小时\n", hours); else printf("已解锁(永久, 直到上锁或 ssh-agent 退出)\n");
     return 0;
 }
 
@@ -412,7 +412,7 @@ int cmd_key(int argc, char **argv)
     if (mopt && (agent_only || !strcmp(c, "release"))) goto loaded;   /* 只要主公钥的: 有 --master 就不用节点 */
     if (!strcmp(c, "unlock") && !mopt) {                 /* 还没有节点: unlock 直接放, 打印推出的主公钥 */
         char p[1300], t[4096]; snprintf(p, sizeof p, "%s/conf", dir);
-        if (m_read(p, t, sizeof t) <= 0) return key_unlock(k > 1 ? atof(av[1]) : 8, 1);
+        if (m_read(p, t, sizeof t) <= 0) return key_unlock(k > 1 ? atof(av[1]) : 0, 1);
     }
     if (mesh_conf_load(dir)) {
         /* 解锁 / 上锁 / 看状态只要 conf 里的主公钥: 名单还没有也行 */
@@ -421,7 +421,7 @@ int cmd_key(int argc, char **argv)
         if (!agent_only || !m || ssh_pub(m + 7, G.master)) { fprintf(stderr, "读不了本机节点 %s(先 custhub join, 或用 --dir 指定)\n", dir); return 2; }
     }
 loaded:
-    if (!strcmp(c, "unlock")) return key_unlock(k > 1 && av[1][0] != '-' ? atof(av[1]) : 8, 0);
+    if (!strcmp(c, "unlock")) return key_unlock(k > 1 && av[1][0] != '-' ? atof(av[1]) : 0, 0);
     if (!strcmp(c, "lock")) return key_lock();
     if (!strcmp(c, "status")) return key_status();
     if (!strcmp(c, "release")) return key_release(k - 1, av + 1);
@@ -489,7 +489,7 @@ loaded:
         if (k != 2 || !member_by_name(av[1])) { fprintf(stderr, "用法: custhub key remove <名单里的名字>\n"); return 2; }
         return trust_edit(dir, av[1], NULL);
     }
-    fprintf(stderr, "用法: custhub key unlock [小时] | lock | status | pending | approve <接入码> [名字] | rename <名字> <新名字> | remove <名字> | ls\n"
+    fprintf(stderr, "用法: custhub key unlock [小时(不给 = 永久)] | lock | status | pending | approve <接入码> [名字] | rename <名字> <新名字> | remove <名字> | ls\n"
                     "                  | pass … | seed [--github 仓库] [--trust 名单 --master 主公钥] [--out 文件]\n"
                     "                  | sign-trust <名单正文> [--master 主公钥] [--out 文件] | release <版本> <文件>… [--only …] [--out 文件]   [--dir 节点目录]\n");
     return 2;

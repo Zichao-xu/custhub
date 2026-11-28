@@ -26,7 +26,7 @@ irm https://github.com/<owner>/<repo>/releases/latest/download/custhub3-join.ps1
 **2. 管理员批准、签通行证**
 
 ```sh
-custhub key unlock                                   # 输入 12 个词, 主钥匙进 ssh-agent(默认 8 小时)
+custhub key unlock                                   # 输入 12 个词, 主钥匙进 ssh-agent(默认永久, 直到上锁或重启; unlock 8 = 限 8 小时)
 custhub key approve R44-CQP                          # 批准, 自动编号 A-1、A-2 …
 custhub key pass --to A-2 --hours 2                  # 给别人签 / 给自己签范围更小的(可选)
 ```

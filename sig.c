@@ -93,9 +93,9 @@ size_t agent_add_req(const uint8_t seed[32], const uint8_t pub[32], const char *
     uint8_t sk[64];
     if (cap < 4 + 1 + 4 + 11 + 4 + 32 + 4 + 64 + 4 + cl + 1 + 4) return 0;
     memcpy(sk, seed, 32); memcpy(sk + 32, pub, 32);
-    out[o++] = 25;
+    out[o++] = life_s ? 25 : 17;                         /* 25 带时限; 17 不带(永久, 直到上锁或 ssh-agent 退出) */
     put_str(out, &o, "ssh-ed25519", 11); put_str(out, &o, pub, 32); put_str(out, &o, sk, 64); put_str(out, &o, comment, cl);
-    out[o++] = 1; put_u32(out, &o, life_s);
+    if (life_s) { out[o++] = 1; put_u32(out, &o, life_s); }
     memset(sk, 0, sizeof sk);
     size_t z = 0; put_u32(out, &z, (uint32_t)(o - 4));
     return o;

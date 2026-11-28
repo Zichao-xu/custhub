@@ -491,7 +491,7 @@ static void draw_unlock(const char *ph, const char *hrs, int f, const char *err,
     out("\x1b[%d;%dH", y + 2, x + 2); out(f == 0 ? "\x1b[1;4m" : "\x1b[2m"); out("口令"); out("\x1b[0m  ");
     snprintf(l, sizeof l, "%s%s", dots, f == 0 && !busy ? "_" : ""); cell(l, w - 10);
     out("\x1b[%d;%dH", y + 3, x + 2); out(f == 1 ? "\x1b[1;4m" : "\x1b[2m"); out("时长"); out("\x1b[0m  ");
-    snprintf(l, sizeof l, "%s%s 小时", hrs, f == 1 && !busy ? "_" : ""); cell(l, w - 10);
+    snprintf(l, sizeof l, "%s%s %s", hrs, f == 1 && !busy ? "_" : "", atof(hrs) > 0 ? "小时" : "(0 = 永久)"); cell(l, w - 10);
     out("\x1b[%d;%dH", y + 5, x); buttons(ub, 2, f >= 2 ? f - 2 : -1, 2);
     out("\x1b[%d;%dH", y + 7, x + 2);
     out(busy ? "\x1b[36m" : err[0] ? "\x1b[31m" : "\x1b[2m");
@@ -502,7 +502,7 @@ static void draw_unlock(const char *ph, const char *hrs, int f, const char *err,
 
 static void act_unlock(void)
 {
-    char ph[1024] = "", hrs[16] = "8", err[300] = "";
+    char ph[1024] = "", hrs[16] = "0", err[300] = "";
     int f = 0;
     for (;;) {
         draw_unlock(ph, hrs, f, err, 0);
@@ -528,7 +528,7 @@ static void act_unlock(void)
         if (quit) break;
         if (!go) continue;
         if (!ph[0]) { snprintf(err, sizeof err, "先输口令"); f = 0; continue; }
-        if (atof(hrs) <= 0) { snprintf(err, sizeof err, "时长要大于 0"); f = 1; continue; }
+        if (atof(hrs) < 0) { snprintf(err, sizeof err, "时长不能小于 0"); f = 1; continue; }
         draw_unlock(ph, hrs, f, "", 1);
         static char o[4096];
         env_pass(ph);
@@ -538,7 +538,7 @@ static void act_unlock(void)
         if (!rc) {
             load_status(); load_pending(); load_ls();
             sel = 0; top = 0;
-            set_msg(!unlocked, unlocked ? "已解锁 %s 小时: 管理功能可以用了" : "子命令说解锁了, 但 ssh-agent 里查不到主钥匙", hrs);
+            set_msg(!unlocked, !unlocked ? "子命令说解锁了, 但 ssh-agent 里查不到主钥匙" : atof(hrs) > 0 ? "已解锁 %s 小时: 管理功能可以用了" : "已解锁(永久, 直到上锁): 管理功能可以用了", hrs);
             return;
         }
         last_line(o, err, sizeof err); if (!err[0]) snprintf(err, sizeof err, "没解锁");

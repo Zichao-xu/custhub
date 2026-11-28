@@ -29,6 +29,8 @@ echo "== 1 解锁"
 K status >/dev/null 2>&1 && ng "还没解锁就说已解锁" || ok "没解锁时 status 是未解锁"
 o=$(CUSTHUB_PASSPHRASE="wrong words here alpha beta gamma delta epsilon zeta" K unlock 2>&1); echo "$o" | grep -q "主公钥和本机名单的主公钥不一样" && ok "口令不对: 推出的主公钥对不上, 不放进去" || ng "错口令: $o"
 CUSTHUB_PASSPHRASE="$PH" K unlock 1 >/dev/null 2>&1 && K status | grep -q "^已解锁" && ok "口令对: 放进 ssh-agent, status 已解锁" || ng "解锁失败"
+K lock >/dev/null 2>&1; o=$(CUSTHUB_PASSPHRASE="$PH" K unlock 2>&1)
+echo "$o" | grep -q "已解锁(永久" && K status | grep -q "^已解锁" && ok "不给时长: 永久解锁(不带时限放进 ssh-agent)" || ng "永久解锁: $o"
 # 对照: 参考实现 passkey.py(私有仓库里有就现算), 没有就用它预先算好的值(同一个测试口令)
 REF=AAAAC3NzaC1lZDI1NTE5AAAAIGaN8mo46ha4VuLUZZB0GnCbI8wIk/98acXuXNQlBHCI
 [ -f ../../passkey.py ] && REF=$(CUSTHUB_PASSPHRASE="$PH" python3 ../../passkey.py pub | cut -d' ' -f2)
